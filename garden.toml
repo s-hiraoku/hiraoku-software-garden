@@ -1,0 +1,11 @@
+[repositories.hirastack]
+path = "hirastack"
+remote = "https://github.com/s-hiraoku/hirastack.git"
+description = "設計原則と実装を照合する検証ハーネス"
+check = ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+
+[repositories.tech-blog-site]
+path = "tech-blog-site"
+remote = "https://github.com/s-hiraoku/tech-blog-site.git"
+description = "技術ブログの Astro サイト"
+check = ["npm", "run", "build"]
