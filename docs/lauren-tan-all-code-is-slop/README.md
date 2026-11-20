@@ -10,6 +10,7 @@
 | ファイル | 用途・由来 |
 | --- | --- |
 | [summary-ja.md](summary-ja.md) | 既存の日本語要約。要点を短く読む |
+| [verification-lifecycle.md](verification-lifecycle.md) | 講演で示された本番前から本番運用までの検証手法と、Garden での使い方 |
 | [provided-ja.md](provided-ja.md) | 2026-11-20 にユーザーから受領した日本語講演テキスト。本文は原状保存 |
 | [O_zcc6Xl12g_transcript.txt](O_zcc6Xl12g_transcript.txt) | 今回添付された英語の自動生成字幕。動画内時刻付き |
 | [transcript-full.md](transcript-full.md) | 既存の英語全文。段落化され、配信時刻とクリップ相対時刻付き |
