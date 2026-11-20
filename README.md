@@ -40,3 +40,7 @@ https://www.youtube.com/watch?v=O_zcc6Xl12g
 - L2 Inner: Claude Code / Cursor Agent（実装）
 
 この repo は、その土台となる「環境と検証」の側を担う。
+
+## ドキュメント
+
+[資料一覧と読む順番](docs/README.md)から、講演資料と実装への適用方針を参照できます。
