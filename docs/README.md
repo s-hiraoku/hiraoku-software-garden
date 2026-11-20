@@ -6,7 +6,7 @@ Garden は複数リポジトリでのエージェント開発を支える Home R
 
 1. [プロジェクト概要](../README.md) — 目的・運用原則・フェーズ。
 2. [講演資料の案内](lauren-tan-all-code-is-slop/README.md) — 背景となる講演の要約、日本語テキスト、英語原文。
-3. [Home Repo の設計と使い方](implementation/README.md) — リポジトリの登録とチェック実行、今後の実装。
+3. [Home Repo の設計と使い方](implementation/README.md) — 共通の開発手順、リポジトリの登録とチェック実行。
 
 ## 資料の置き場
 

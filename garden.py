@@ -11,8 +11,8 @@ import tomllib
 def read_catalog(path):
     with path.open("rb") as file:
         repositories = tomllib.load(file).get("repositories")
-    if not isinstance(repositories, dict) or not repositories:
-        raise ValueError("catalog needs at least one [repositories.<id>] table")
+    if not isinstance(repositories, dict):
+        raise ValueError("catalog needs a [repositories] table")
     for repo_id, entry in repositories.items():
         if not isinstance(entry, dict):
             raise ValueError(f"{repo_id}: expected a repository table")
@@ -77,6 +77,9 @@ def main():
     if args.action == "list":
         print(json.dumps(repositories, ensure_ascii=False, indent=2))
         return 0
+
+    if not repositories:
+        parser.error(f"{args.catalog}: no repositories registered; add a [repositories.<id>] entry")
 
     unknown = [repo_id for repo_id in args.repo if repo_id not in repositories]
     if unknown:
