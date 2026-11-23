@@ -237,8 +237,81 @@ def _setup_worktree(
     return wt_path, branch_name
 
 
-def _cleanup_worktree(root: Path, wt_path: Path) -> None:
+def _cleanup_worktree(
+    root: Path, wt_path: Path, *, delete_branch: str | None = None
+) -> None:
     git_run(root, "worktree", "remove", "--force", str(wt_path))
+    if delete_branch:
+        git_run(root, "branch", "-D", delete_branch)
+
+
+def _commit_verified_worktree_changes(
+    worktree_path: Path,
+    *,
+    run_id: str,
+    target_commit: str,
+    changed_paths: set[str],
+) -> str | None:
+    """Commit guard-approved agent changes onto the isolated worktree branch.
+
+    Returns the verified commit SHA if the branch tip differs from target_commit
+    with a non-empty tree diff; returns None if no changes remain.
+    Raises GitError if committing fails unexpectedly.
+    """
+    if changed_paths:
+        stage_paths = [
+            p
+            for p in sorted(changed_paths)
+            if (worktree_path / p).exists()
+            or git_run(worktree_path, "ls-files", "--error-unmatch", "--", p).returncode == 0
+        ]
+        if stage_paths:
+            status_proc = git_run(
+                worktree_path, "status", "--porcelain", "--", *stage_paths
+            )
+            if status_proc.returncode != 0:
+                raise GitError(
+                    f"git status failed in worktree: {status_proc.stderr.strip()}"
+                )
+            if status_proc.stdout.strip():
+                add_proc = git_run(worktree_path, "add", "-A", "--", *stage_paths)
+                if add_proc.returncode != 0:
+                    raise GitError(
+                        f"git add failed in worktree: {add_proc.stderr.strip()}"
+                    )
+                staged_diff = git_run(worktree_path, "diff", "--cached", "--quiet")
+                if staged_diff.returncode == 1:
+                    commit_proc = git_run(
+                        worktree_path,
+                        "-c",
+                        "commit.gpgsign=false",
+                        "-c",
+                        "user.name=Software Garden",
+                        "-c",
+                        "user.email=garden@local.invalid",
+                        "commit",
+                        "-m",
+                        f"garden({run_id}): apply verified changes",
+                    )
+                    if commit_proc.returncode != 0:
+                        raise GitError(
+                            "git commit failed in worktree: "
+                            f"{commit_proc.stderr.strip() or commit_proc.stdout.strip()}"
+                        )
+                elif staged_diff.returncode not in (0, 1):
+                    raise GitError(
+                        f"git diff --cached failed: {staged_diff.stderr.strip()}"
+                    )
+
+    tip_sha = head_commit(worktree_path)
+    if tip_sha == target_commit:
+        return None
+    diff_proc = git_run(worktree_path, "diff", "--quiet", target_commit, tip_sha)
+    if diff_proc.returncode == 0:
+        return None
+    if diff_proc.returncode != 1:
+        raise GitError(f"git diff failed in worktree: {diff_proc.stderr.strip()}")
+    return tip_sha
 
 
 def _apply_effective_delegation(
@@ -419,6 +492,7 @@ def run_flow(
         escalation: dict[str, Any] | None,
         requested_report_kind: str,
         worktree_branch: str | None = None,
+        verified_commit: str | None = None,
     ) -> EngineRunResult:
         finished_dt = datetime.now(timezone.utc)
         duration_sec = round(time.monotonic() - started_mono, 3)
@@ -449,6 +523,7 @@ def run_flow(
                 "max_cost_usd": eff_delegation.max_cost_usd,
             },
             "worktree_branch": worktree_branch,
+            "verified_commit": verified_commit,
             "started_at": started_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "finished_at": finished_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "duration_sec": duration_sec,
@@ -527,6 +602,8 @@ def run_flow(
     check_cache: dict[str, CheckExecutionResult] = {}
     executed_checks: dict[str, CheckExecutionResult] = {}
     steps_by_id = {s.id: s for s in flow.steps}
+    agent_changed_paths: set[str] = set()
+    verified_commit: str | None = None
 
     retries_used = 0
     needs_human = False
@@ -684,6 +761,8 @@ def run_flow(
             }
             return response, False
 
+        if guard_res.changed_files:
+            agent_changed_paths.update(guard_res.changed_files)
         return response, True
 
     try:
@@ -916,6 +995,29 @@ def run_flow(
         else:
             verdict = "SATISFIED"
 
+        recorded_branch: str | None = worktree_branch
+        if verdict == "SATISFIED" and created_worktree and worktree_branch is not None:
+            if agent_changed_paths:
+                try:
+                    verified_commit = _commit_verified_worktree_changes(
+                        worktree_path,
+                        run_id=run_id,
+                        target_commit=target_commit,
+                        changed_paths=agent_changed_paths,
+                    )
+                except GitError as error:
+                    verdict = "INCONCLUSIVE"
+                    verified_commit = None
+                    escalation = {
+                        "kind": "escalation",
+                        "reason": "verified_commit_failed",
+                        "detail": str(error),
+                    }
+            if verified_commit is None:
+                recorded_branch = None
+        elif not keep_worktree:
+            recorded_branch = None
+
         return _finalize(
             verdict=verdict,
             step_records=step_records,
@@ -924,8 +1026,13 @@ def run_flow(
             usage_totals=usage_totals,
             escalation=escalation,
             requested_report_kind=requested_report_kind,
-            worktree_branch=worktree_branch,
+            worktree_branch=recorded_branch,
+            verified_commit=verified_commit,
         )
     finally:
         if created_worktree and not keep_worktree:
-            _cleanup_worktree(root, worktree_path)
+            _cleanup_worktree(
+                root,
+                worktree_path,
+                delete_branch=worktree_branch if verified_commit is None else None,
+            )

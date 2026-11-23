@@ -622,38 +622,43 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
 
     reflect_states = 0
     reflect_violations: list[dict[str, Any]] = []
+    target_sha = "a" * 40
+    changed_sha = "b" * 40
     verdicts = ("SATISFIED", "UNSATISFIED", "INCONCLUSIVE", "NEEDS_HUMAN", "ABORTED")
     modes = ("observe_only", "propose_pr", "auto_merge")
     scopes = ("all_specs", "flow_checks")
     branches = (None, "garden/run-1")
+    verified_commits = (None, target_sha, changed_sha)
     criteria_variants = (
         {"AC-001": {"verdict": "satisfied"}},
         {"AC-001": {"verdict": "satisfied"}, "INV-001": {"verdict": "not_evaluated"}},
         {"AC-001": {"verdict": "inconclusive"}},
         {},
     )
-    for verdict, mode, eval_changed, scope, branch, crit in itertools.product(
-        verdicts, modes, (False, True), scopes, branches, criteria_variants
+    for verdict, mode, eval_changed, scope, branch, v_commit, crit in itertools.product(
+        verdicts, modes, (False, True), scopes, branches, verified_commits, criteria_variants
     ):
         reflect_states += 1
         run_data = {
             "run_id": "r1",
             "verdict": verdict,
-            "target": {"commit": "a" * 40, "evaluation_criteria_changed": eval_changed},
+            "target": {"commit": target_sha, "evaluation_criteria_changed": eval_changed},
             "effective_delegation": {"mode": mode},
             "flow_scope": scope,
             "worktree_branch": branch,
+            "verified_commit": v_commit,
             "criteria_results": crit,
         }
         decision = evaluate_reflect_gate(run_data)
         all_crit_ok = bool(crit) and all(v.get("verdict") == "satisfied" for v in crit.values())
+        has_verified_diff = branch is not None and v_commit is not None and v_commit != target_sha
 
         # Safety property 1: auto_merge only when every safety precondition holds
         if decision.allowed_action == "auto_merge":
             if not (
                 verdict == "SATISFIED"
                 and mode == "auto_merge"
-                and branch is not None
+                and has_verified_diff
                 and not eval_changed
                 and scope == "all_specs"
                 and all_crit_ok
@@ -672,6 +677,16 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
                 reflect_violations.append(
                     {
                         "description": f"expected blocked for verdict={verdict}, mode={mode}, got {decision.allowed_action}",
+                        "meta": run_data | {"decision": decision.to_dict()},
+                    }
+                )
+
+        # Safety property 3: propose_pr / auto_merge never allowed without verified_commit diff
+        if decision.allowed_action in ("propose_pr", "auto_merge") and not has_verified_diff:
+            if len(reflect_violations) < 3:
+                reflect_violations.append(
+                    {
+                        "description": f"allowed {decision.allowed_action} without verified_commit diff",
                         "meta": run_data | {"decision": decision.to_dict()},
                     }
                 )
@@ -732,7 +747,7 @@ def main() -> int:
             "assumptions": [
                 "bounded engine transition space (max_retries<=2, 2 checks)",
                 "bounded delegation override space (45,927 combinations)",
-                "bounded glob path matrix (195 cases) and reflect gate matrix (480 cases)",
+                f"bounded glob path matrix ({extra_res['guard_states_checked']} cases) and reflect gate matrix ({extra_res['reflect_states_checked']} cases)",
             ],
             "scope": f"bounded exhaustive real-code verification ({total_states} states)",
             "completed": True,
