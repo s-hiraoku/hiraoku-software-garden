@@ -29,7 +29,9 @@
 
 | 用語 | 定義 | 使い分け・注意 | 出典 |
 | --- | --- | --- | --- |
-| カタログ（`garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
+| カタログ（ナーサリー直下の `garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
+| ガーデン定義（対象リポジトリ直下の `garden.toml`） | そのガーデンで採用したテンプレートの版、製品仕様の場所、トリガーと検証手順などを記す設定。 | 設計段階。現行の CLI が読むカタログはナーサリー側で管理する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
+| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | 設計例では `checks` に実行するチェックの名前を並べる。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
 | リポジトリ ID | カタログ上の安定した識別子（`<repo-id>`）。`check` の引数に渡す。 | リポジトリ名と一致していなくてもよい。 | [AGENTS.md](AGENTS.md) |
 | ワークスペース | カタログの `path` を解決する基準ディレクトリ。既定はナーサリーの親ディレクトリ（`--workspace`）。 | ナーサリーと対象リポジトリを同じ親に並べる前提。 | [garden.py](garden.py) |
 | チェック（登録済みチェック） | 対象リポジトリで既に使っている自動チェックのコマンド。カタログの `check` に引数の配列で登録し、作業ツリーのルートで実行する。 | 「検証」の一部だが同義ではない。チェックは終了コードで合否が決まるコマンド。 | [docs/implementation/README.md](docs/implementation/README.md) |
