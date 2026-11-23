@@ -13,6 +13,8 @@ Garden は複数リポジトリでのエージェント開発を支える Home R
 | 場所 | 内容 |
 | --- | --- |
 | `lauren-tan-all-code-is-slop/` | 外部講演の保存資料と出典・照合メモ |
+| [Matt Pocock のソフトウェアファクトリー](matt-pocock-software-factory.md) | エージェントを起動する自動化の設計と Lauren Tan との関係 |
+| [ソフトウェアファクトリーの基礎と Garden の優先順位](software-factory-foundations.md) | 各資料の比較と、品質ゲート・自動化・測定を取り入れる順序 |
 | `implementation/` | 共通基盤の設計、使い方、今後の実装 |
 
 外部資料の記述と、このプロジェクトで採用した仕様を区別します。実装・検証が済んでいない内容を完了扱いにはしません。
