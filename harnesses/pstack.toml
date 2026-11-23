@@ -1,0 +1,23 @@
+schema_version = 1
+name = "pstack"
+upstream = "https://github.com/cursor/plugins"
+subpath = "pstack"
+pinned_ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+
+[skills]
+core = [
+  "poteto-mode",
+  "correct",
+  "create-verification-skill",
+  "maintain-verification-skill",
+]
+optional = [
+  "create-formal-verification-skill",
+]
+
+[resolution]
+search_paths = [
+  "~/.gemini/config/plugins/pstack",
+  "~/.cursor/plugins/pstack",
+  ".agents/skills",
+]

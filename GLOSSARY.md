@@ -13,7 +13,7 @@
 | 対象リポジトリ | ナーサリーに登録して育てる個々のプロダクトのリポジトリ。プロダクトコード、固有の仕様、対象固有のハーネスの実装と依存関係を持つ。 | 「プロジェクト」とは呼ばない。ガーデンは対象リポジトリに生まれる育成環境、対象リポジトリはその置き場。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | ソフトウェアガーデン | このプロジェクト全体の名前。ナーサリーと、そこから生まれた全ガーデンを合わせた取り組みを指す。 | 「このプロジェクト」と言うときはこの意味。個々の対象リポジトリを「プロジェクト」と呼ばない。 | [docs/philosophy.md](docs/philosophy.md) |
 | ソフトウェアファクトリー | 人が仕様を定め、ガーデンが実装と検証を繰り返し、人が完成を判断する、という開発の仕組み全体。ソフトウェアガーデンが目指す姿。 | 外部事例（Pocock、StrongDM など）の意味とは少しずつ異なる。外部の意味を指すときは「〇〇の言うソフトウェアファクトリー」と明示する。 | [README.md](README.md), [docs/philosophy.md](docs/philosophy.md) |
-| テンプレート（育て方） | 種類に合う手順、道具、設計上の制約の組み合わせとしてナーサリーに蓄える、繰り返し使える育て方の知識。共通の開発ハーネスも含む。 | ファイルの雛形の意味ではない。現時点では文書上の方針で、実体のテンプレートファイルはまだない。 | [docs/philosophy.md](docs/philosophy.md) |
+| テンプレート（育て方） | 種類に合う手順、道具、設計上の制約の組み合わせとしてナーサリーに蓄える、繰り返し使える育て方の知識。共通の開発ハーネスも含む。 | 単なるファイル雛形ではなく検証観点・委譲既定値・推奨スキルを含む。現時点では `templates/cli/v1/` を実装済み、他の型は未実装。 | [docs/philosophy.md](docs/philosophy.md), [詳細設計書](docs/implementation/detailed-design.md) |
 | ハーネス | エージェントが設計上の制約を守り、実装した挙動を自分で確かめられるようにする仕組み。 | 「共通の開発ハーネス」と「対象固有のハーネス」のどちらかを必ず明示する。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | 共通の開発ハーネス | 全対象リポジトリで使う開発の進め方。現在は pstack を採用。 | ナーサリー側の責務。「共通ハーネス」とは略さない。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | 対象固有のハーネス | その製品をどう起動し、何を操作し、何をもって成功とするかを持つ仕組み。ライブラリ、ドライバー、テストデータ、再発防止チェックを含む。 | 対象リポジトリ側に置く。ナーサリーには置かない。 | [docs/implementation/README.md](docs/implementation/README.md) |
@@ -25,16 +25,16 @@
 
 ## CLI とカタログ
 
-`garden.py` が提供するのは `list` と `check` の二つだけです。
+`garden.py`（および `garden` CLI）は、カタログ操作（`list`・`check`）に加えて、対象リポジトリの導入・診断・更新（`init`・`doctor`・`upgrade`）、フロー実行（`run`）、報告（`report`）、介入記録（`feedback`）を提供します。
 
 | 用語 | 定義 | 使い分け・注意 | 出典 |
 | --- | --- | --- | --- |
 | カタログ（ナーサリー直下の `garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| ガーデン定義（対象リポジトリの `.garden/garden.toml`） | そのガーデンで採用したテンプレート・共通の開発ハーネス・対象固有のハーネスの版、製品仕様の場所、委譲範囲、トリガーとフローを記す設定。 | 設計段階（未実装）。ナーサリー直下のカタログ（`garden.toml`）と配置を分けて衝突を防ぐ。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
-| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | 詳細設計では `check`・`agent`・`gate`・`report` の型付きステップと失敗時遷移を決定論的ステートマシンで実行する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
-| 実行記録（Run Artifacts） | フロー1回分の実行結果・版情報・ステップ別ログ・証拠・要約を `.garden/runs/<run-id>/` にまとめた構造化出力。 | ローカル実行と GitHub Actions Artifacts で同一レイアウトを使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
-| 冪等キー | 対象リポジトリ・コミット・トリガー・フロー・承認済みガーデン定義および承認済み仕様の blob SHA から算出する識別子。 | 同じ事象の再送による重複実行を防ぐために使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
-| 介入レコード | 人が手直しや切り分けを行った理由（分類コード）と再発防止チェックへの落とし込み状態を記録する構造化データ。 | 工程⑦の改善判断に使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
+| ガーデン定義（対象リポジトリの `.garden/garden.toml`） | そのガーデンで採用したテンプレート・共通の開発ハーネス・対象固有のハーネスの版、製品仕様の場所、委譲範囲、トリガーとフローを記す設定。 | ナーサリー直下のカタログ（`garden.toml`）と配置を分けて衝突を防ぐ。ローダーと厳格バリデーターは実装済み。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
+| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | `check`・`agent`・`gate`・`report` の型付きステップと失敗時遷移を決定論的ステートマシンで実行する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
+| 実行記録（Run Artifacts） | フロー1回分の実行結果・版情報・ステップ別ログ・証拠・要約を `.garden/runs/<run-id>/` にまとめた構造化出力。 | ローカル実行と GitHub Actions Artifacts で同一レイアウトを使う。 | [詳細設計書](docs/implementation/detailed-design.md) |
+| 冪等キー | 対象リポジトリ・コミット・トリガー・フロー・承認済みガーデン定義および承認済み仕様の blob SHA から算出する識別子。 | 同じ事象の再送による重複実行を防ぐために使う。 | [詳細設計書](docs/implementation/detailed-design.md) |
+| 介入レコード | 人が手直しや切り分けを行った理由（分類コード）と再発防止チェックへの落とし込み状態を記録する構造化データ。 | 工程⑦の改善判断に使う（`garden feedback` で記録・集計）。 | [詳細設計書](docs/implementation/detailed-design.md) |
 | リポジトリ ID | カタログ上の安定した識別子（`<repo-id>`）。`check` の引数に渡す。 | リポジトリ名と一致していなくてもよい。 | [AGENTS.md](AGENTS.md) |
 | ワークスペース | カタログの `path` を解決する基準ディレクトリ。既定はナーサリーの親ディレクトリ（`--workspace`）。 | ナーサリーと対象リポジトリを同じ親に並べる前提。 | [garden.py](garden.py) |
 | チェック（登録済みチェック） | 対象リポジトリで既に使っている自動チェックのコマンド。カタログの `check` に引数の配列で登録し、作業ツリーのルートで実行する。 | 「検証」の一部だが同義ではない。チェックは終了コードで合否が決まるコマンド。 | [docs/implementation/README.md](docs/implementation/README.md) |

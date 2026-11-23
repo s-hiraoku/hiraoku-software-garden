@@ -1,0 +1,21 @@
+name: Nursery CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run catalog compatibility tests
+        run: python3 -m unittest test_garden.py -v
+      - name: Run full unit and integration test suite
+        run: python3 -m unittest discover -s tests -v
+      - name: Run bounded exhaustive formal invariant verifier
+        run: python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
