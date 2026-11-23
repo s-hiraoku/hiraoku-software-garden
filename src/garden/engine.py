@@ -710,6 +710,18 @@ def run_flow(
                         stop_flow = True
                         break
                     if step.on_fail == "fix_and_retry":
+                        if eff_delegation.mode == "observe_only":
+                            needs_human = True
+                            escalation = {
+                                "kind": "escalation",
+                                "reason": "observe_only_fix_disallowed",
+                                "detail": (
+                                    "cannot invoke fix_and_retry agent while effective "
+                                    "delegation mode is observe_only"
+                                ),
+                            }
+                            stop_flow = True
+                            break
                         if (
                             step_retries < step_retry_cap
                             and retries_used < eff_delegation.max_retries
@@ -744,6 +756,17 @@ def run_flow(
                     break
 
             elif step.type == "agent":
+                if eff_delegation.mode == "observe_only" and step.purpose != "investigate":
+                    needs_human = True
+                    escalation = {
+                        "kind": "escalation",
+                        "reason": "observe_only_agent_disallowed",
+                        "detail": (
+                            f"cannot invoke agent step '{step.id}' (purpose={step.purpose}) "
+                            "while effective delegation mode is observe_only"
+                        ),
+                    }
+                    break
                 _, agent_ok = _exec_agent(step, {})
                 if not agent_ok:
                     break

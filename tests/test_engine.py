@@ -406,3 +406,30 @@ check = "slow"
             summary = (Path(out["run_dir"]) / "summary.md").read_text(encoding="utf-8")
             # Must NOT emit harvest when evaluation criteria changed
             self.assertIn("<!-- garden:v1 kind=verified ", summary)
+
+    def test_spec_modified_pr_downgrades_to_observe_only_and_never_runs_fix_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _build_fixture_repo(Path(tmp) / "repo", app_value="OK")
+            git(repo, "switch", "-c", "feat/spec-revision")
+            # Modify both the spec (triggering runtime observe_only downgrade) and break app.txt
+            spec_file = repo / "docs" / "specs" / "app.md"
+            spec_file.write_text(
+                spec_file.read_text(encoding="utf-8") + "\n<!-- proposed revision -->\n",
+                encoding="utf-8",
+            )
+            (repo / "src" / "app.txt").write_text("BROKEN\n", encoding="utf-8")
+            commit_all(repo, "revise spec and break app")
+
+            proc = run_cli("run", "verify_and_fix", "--target", str(repo), "--json")
+            self.assertEqual(proc.returncode, 4)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["verdict"], "NEEDS_HUMAN")
+            self.assertEqual(out["run"]["effective_delegation"]["mode"], "observe_only")
+            self.assertEqual(out["run"]["retries_used"], 0)
+            self.assertEqual(
+                out["run"]["escalation"]["reason"], "observe_only_fix_disallowed"
+            )
+            # Confirm no agent step was executed at all
+            self.assertFalse(
+                any("fix_code" in s for s in out["run"]["steps"])
+            )
