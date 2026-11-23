@@ -4,7 +4,7 @@
 
 | 人・組織 | 重視する基礎 |
 | --- | --- |
-| Lauren Tan | 「ミシュランの厨房」として、コードベースのアーキテクチャ、型、lint、決定論的なチェック、動作の検証を自動化に先立って整えます。pstack はその手順を再利用するための一例です。 [講演と対談の参考メモ](cases/lauren-tan/software-factory-notes.md) |
+| Lauren Tan | 「ミシュランの厨房」として、コードベースのアーキテクチャ、型、lint、決定論的なチェック、動作の検証を自動化に先立って整えます。pstack はその手順を再利用するための一例です。 [講演と対談の参考メモ](cases/lauren-tan.md) |
 | Matt Pocock | 仕事を起動するトリガーと実行の仕組みを「ソフトウェアファクトリー」と呼びます。共通の設計語彙を使い、一つのトリガーから始めます。Sandcastle v1 ではスキルを関数として呼び出す構想を示しています。 [Pocock の参考メモ](cases/matt-pocock-software-factory.md) |
 | OpenAI | Symphonyでは、チケットの状態と作業環境を照合し、着手できる仕事の割り当て、再試行、停止を管理します。[Symphony の公開仕様と参考メモ](cases/openai.md) |
 | StrongDM | Attractorでは、検証結果による工程の分岐、再試行、人の承認をワークフローの定義に含めます。[Attractor の公開仕様と参考メモ](cases/strongdm.md) |

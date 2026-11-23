@@ -11,7 +11,7 @@
 | [Matt Pocock — Software Factory](cases/matt-pocock-software-factory.md) | 仕事とトリガーの定義、ランナー、人が判断する位置 |
 | [Anthropic — Claude Code Action](cases/anthropic.md) | GitHub のイベントから始めるレビュー、定期保守、仕事に応じた権限 |
 | [Warp — Warp Factories](cases/warp.md) | 対象リポジトリやエージェントの設定をコードで持つ考え方、実行結果からの改善 |
-| [Lauren Tan — All Code Is Slop (Except Mine)](cases/lauren-tan/README.md) | コードと開発環境への投資、決定的なチェック、実際の挙動から得る証拠 |
+| [Lauren Tan — All Code Is Slop (Except Mine)](cases/lauren-tan.md) | コードと開発環境への投資、決定的なチェック、実際の挙動から得る証拠 |
 
 ## 仕様・検証・出荷の手法
 
@@ -20,7 +20,11 @@
 | [仕様を計画・実装・検証につなげる](methods/specification.md) | GitHub Spec Kit の仕様駆動開発と、実装に渡す前に人が決めること |
 | [形式検証の入口](methods/formal-verification.md) | TLA⁺・TLC、Quint、Lean 4 が扱う問いと、それぞれで得られる証拠 |
 | [出荷後の確認と改善](methods/release-and-improvement.md) | Argo Rollouts の段階的な公開、DORA のデリバリー指標 |
-| [開発から本番運用までの検証](cases/lauren-tan/verification-lifecycle.md) | 本番前、デプロイ、リリース、運用中に確かめること |
+| [開発から本番運用までの検証](sources/all-code-is-slop/verification-lifecycle.md) | 本番前、デプロイ、リリース、運用中に確かめること |
+
+## 保存資料
+
+英語の文字起こし、日本語訳と要約、照合メモを収録しています。[All Code Is Slop (Except Mine) の講演資料](sources/all-code-is-slop/README.md)
 
 ## 横断メモと共有資料
 

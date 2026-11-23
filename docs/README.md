@@ -13,7 +13,8 @@ Garden の基本方針を定めた正式文書は、[ソフトウェアガーデ
 | 場所 | 内容 |
 | --- | --- |
 | `references/` | 参考資料一覧、横断メモ、共有資料 |
-| `references/cases/` | 公開仕様や実践事例。講演の原文・訳文・要約も収録 |
+| `references/cases/` | 公開仕様や実践事例 |
+| `references/sources/` | 講演の原文・訳文・要約などの保存資料 |
 | `references/methods/` | 仕様の定義、形式検証、出荷と改善の手法 |
 | `implementation/` | 共通基盤の設計、使い方、今後の実装 |
 
