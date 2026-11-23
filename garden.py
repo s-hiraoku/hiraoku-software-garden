@@ -1,4 +1,4 @@
-"""Run existing repository checks from the Garden home repo."""
+"""Run existing checks in target repositories from the Nursery repository."""
 
 import argparse
 import json
