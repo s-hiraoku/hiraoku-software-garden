@@ -3,7 +3,7 @@
 この文書は、[ソフトウェアガーデン設計書](design.md) の方針と7工程の流れを、そのまま実装と検証に着手できる水準の仕様（アーキテクチャ、ファイル配置、スキーマ、ステートマシン、プロトコル、CLI、マイルストーン）に落とし込んだものです。用語は [用語集](../../GLOSSARY.md) に従います。
 
 > **現在地（実装済みと未実装の区別）**
-> - **実装済み（MVP-1〜MVP-3＋実戦投入基盤）**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・互換シム `garden.py`）、カタログ（`list` / `check`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサーと信頼できる承認ブランチ（既定 `main` / CLI・ワークフロー指定）による Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・`[[triggers]]` 自動解決 `auto`・2層判定・Worktree 分離・ローカル＆GitHub HTML マーカー重複スキップ・`Run Artifacts`）、実プロバイダー対応エージェントアダプター（`codex` / `claude` / `antigravity` / `custom` / `mock`）と事後ガード（`guard.py`）、介入レコード（`garden feedback`）、`garden report`、`harnesses/pstack.toml`、全4型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`）と `garden init` / `upgrade`、再利用可能 GitHub Actions ワークフロー（`.github/workflows/garden-reusable.yml`）、プロジェクトローカル検証スキル（`verify-garden`）および有界全状態形式検証（`formal-verify-garden-engine`）、自動テスト群（`test_garden.py`・`tests/`）。
+> - **実装済み（MVP-1〜MVP-3＋実戦投入基盤＋ナーサリー自身のドッグフーディング）**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・互換シム `garden.py`）、カタログ（`list` / `check`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサーと信頼できる承認ブランチ（既定 `main` / CLI・ワークフロー指定）による Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・`[[triggers]]` 自動解決 `auto`・2層判定・Worktree 分離・ローカル＆GitHub HTML マーカー重複スキップ・`Run Artifacts`）、実プロバイダー対応エージェントアダプター（`codex` / `claude` / `antigravity` / `custom` / `mock`）と事後ガード（`guard.py`）、工程6の反映ゲート（`garden reflect`・既定ドライラン）、介入レコード（`garden feedback`）、`garden report`、`harnesses/pstack.toml`、全4型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`）と `garden init` / `upgrade`、再利用可能 GitHub Actions ワークフロー（`.github/workflows/garden-reusable.yml`）、ナーサリー自身のドッグフーディング構成（`.garden/garden.toml`・`docs/specs/nursery-cli.md`・`.github/workflows/garden-dogfood.yml`・`python-exhaustive` 形式検査統合）、プロジェクトローカル検証スキル（`verify-garden`）および有界全状態形式検証（`formal-verify-garden-engine`・8不変条件）、自動テスト群（`test_garden.py`・`tests/`）。
 > - **未実装（今後の対象）**: MVP-4（1号目の実対象リポジトリへの導入と設計書 §6 の3条件実証）、および実 GitHub Actions 環境での `garden-reusable.yml` 実稼働確認。
 
 ---
@@ -785,6 +785,7 @@ search_paths = [
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
 | 実行・記録 | `garden run <flow> [--target PATH] [--trigger-event E] [--trigger-id ID] [--force] [--keep-worktree]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
 | 実行・記録 | `garden report <run-dir> [--format md\|json] [--post-github-issue N]` | `run.json` から要約生成・GitHub Issue/PR への投稿とラベル更新 | `0` 成功 / `1` 投稿失敗 / `2` 入力不正 |
+| 実行・記録 | `garden reflect <run-dir> [--base BRANCH] [--execute]` | 工程⑥の反映ゲート判定（既定ドライラン、`--execute` で PR 作成・条件充足時のみ `--auto` マージ） | `0` 反映許可・なし / `1` ブロック・実行失敗 / `2` 入力不正 |
 | 改善・測定 | `garden feedback add\|summary [--target PATH]` | 人の介入レコードの記録と分類別集計 | `0` 成功 / `2` 入力不正 |
 
 ※ `garden run` の終了コードを `1` (`UNSATISFIED`) / `3` (`INCONCLUSIVE`) / `4` (`NEEDS_HUMAN`) / `5` (`ABORTED`) で分けることで、GitHub Actions 側が「失敗」「判定不能」「人判断待ち」「明示中断」を機械的に分岐・ラベル付けできます。

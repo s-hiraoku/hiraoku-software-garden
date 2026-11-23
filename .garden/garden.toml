@@ -1,0 +1,99 @@
+schema_version = 1
+
+[template]
+name = "cli"
+version = 1
+
+[common_harness]
+name = "pstack"
+ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+skills = [
+  "create-verification-skill",
+  "maintain-verification-skill",
+  "create-formal-verification-skill",
+]
+
+[target_harness]
+name = "nursery-self-harness"
+version = 1
+
+[spec]
+paths = ["docs/specs/nursery-cli.md"]
+approval_branch = "main"
+
+[delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 0
+max_duration_sec = 300
+max_cost_usd = 0.0
+require_checks = ["catalog_compat", "unit_integration", "formal_invariants"]
+
+[checks.catalog_compat]
+kind = "check"
+command = ["python3", "-m", "unittest", "test_garden.py", "-v"]
+timeout_sec = 60
+covers = ["AC-001"]
+inconclusive_exit_codes = [75]
+status = "active"
+
+[checks.unit_integration]
+kind = "check"
+command = ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+timeout_sec = 180
+covers = ["AC-002"]
+inconclusive_exit_codes = [75]
+status = "active"
+
+[checks.formal_invariants]
+kind = "formal_check"
+tool = "python-exhaustive"
+model_path = ".agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py"
+command = ["python3", ".agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py"]
+timeout_sec = 60
+covers = ["INV-001", "INV-002"]
+invariants = ["INV-001", "INV-002"]
+status = "active"
+
+[[triggers]]
+id = "pr-dogfood"
+event = "pull_request"
+flow = "verify_all"
+[triggers.conditions]
+actions = ["opened", "synchronize"]
+
+[flows.verify_all]
+description = "ナーサリー自身の承認済み仕様に対して互換テスト・結合テスト・形式検証を実行する"
+scope = "all_specs"
+
+[[flows.verify_all.steps]]
+id = "run_catalog_compat"
+type = "check"
+check = "catalog_compat"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+
+[[flows.verify_all.steps]]
+id = "run_unit_integration"
+type = "check"
+check = "unit_integration"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+
+[[flows.verify_all.steps]]
+id = "run_formal_invariants"
+type = "check"
+check = "formal_invariants"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+
+[[flows.verify_all.steps]]
+id = "final_gate"
+type = "gate"
+require_checks = ["catalog_compat", "unit_integration", "formal_invariants"]
+
+[[flows.verify_all.steps]]
+id = "emit_report"
+type = "report"
+kind = "auto"

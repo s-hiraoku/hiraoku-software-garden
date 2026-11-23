@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -32,7 +33,8 @@ from garden.definition import (
     load_definition_bytes,
 )
 from garden.engine import VERDICT_EXIT_CODES, run_flow
-from garden.guard import GuardResult
+from garden.guard import GuardResult, match_glob
+from garden.publish import evaluate_reflect_gate
 from garden.spec import ApprovedSpecRecord, SpecDocument, TrustAnchorResult
 
 PSTACK_SHA = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
@@ -575,29 +577,188 @@ def check_delegation_monotonicity() -> dict[str, Any]:
     return {"states_checked": states_checked, "violations": violations}
 
 
+def check_guard_and_reflect_invariants() -> dict[str, Any]:
+    """Exhaustively check INV-GUARD-PATH-SOUNDNESS and INV-REFLECT-GATE-SOUNDNESS."""
+    guard_states = 0
+    guard_violations: list[dict[str, Any]] = []
+
+    patterns_and_oracle = [
+        (".garden/**", lambda norm: norm.startswith(".garden/")),
+        (".github/workflows/**", lambda norm: norm.startswith(".github/workflows/")),
+        ("docs/specs/**", lambda norm: norm.startswith("docs/specs/")),
+        ("src/**", lambda norm: norm.startswith("src/")),
+        ("src/*.py", lambda norm: norm.startswith("src/") and "/" not in norm[4:] and norm.endswith(".py")),
+    ]
+    prefixes = ("", "./", "././")
+    sample_paths = (
+        ".garden/garden.toml",
+        ".garden/runs/r1/run.json",
+        "garden/garden.toml",
+        "garden/cli.py",
+        ".github/workflows/ci.yml",
+        "github/workflows/ci.yml",
+        "docs/specs/app.md",
+        "docs/specs/sub/app.md",
+        "docs/README.md",
+        "src/a.py",
+        "src/nested/b.py",
+        "src/a.txt",
+        "tests/test_a.py",
+    )
+    for (pat, oracle), pref, raw_p in itertools.product(
+        patterns_and_oracle, prefixes, sample_paths
+    ):
+        guard_states += 1
+        candidate = pref + raw_p
+        actual = match_glob(candidate, pat)
+        expected = oracle(raw_p)
+        if actual != expected and len(guard_violations) < 3:
+            guard_violations.append(
+                {
+                    "description": f"match_glob({candidate!r}, {pat!r}) returned {actual}, expected {expected}",
+                    "meta": {"path": candidate, "pattern": pat, "actual": actual, "expected": expected},
+                }
+            )
+
+    reflect_states = 0
+    reflect_violations: list[dict[str, Any]] = []
+    target_sha = "a" * 40
+    changed_sha = "b" * 40
+    verdicts = ("SATISFIED", "UNSATISFIED", "INCONCLUSIVE", "NEEDS_HUMAN", "ABORTED")
+    modes = ("observe_only", "propose_pr", "auto_merge")
+    scopes = ("all_specs", "flow_checks")
+    branches = (None, "garden/run-1")
+    verified_commits = (None, target_sha, changed_sha)
+    criteria_variants = (
+        {"AC-001": {"verdict": "satisfied"}},
+        {"AC-001": {"verdict": "satisfied"}, "INV-001": {"verdict": "not_evaluated"}},
+        {"AC-001": {"verdict": "inconclusive"}},
+        {},
+    )
+    for verdict, mode, eval_changed, scope, branch, v_commit, crit in itertools.product(
+        verdicts, modes, (False, True), scopes, branches, verified_commits, criteria_variants
+    ):
+        reflect_states += 1
+        run_data = {
+            "run_id": "r1",
+            "verdict": verdict,
+            "target": {"commit": target_sha, "evaluation_criteria_changed": eval_changed},
+            "effective_delegation": {"mode": mode},
+            "flow_scope": scope,
+            "worktree_branch": branch,
+            "verified_commit": v_commit,
+            "criteria_results": crit,
+        }
+        decision = evaluate_reflect_gate(run_data)
+        all_crit_ok = bool(crit) and all(v.get("verdict") == "satisfied" for v in crit.values())
+        has_verified_diff = branch is not None and v_commit is not None and v_commit != target_sha
+
+        # Safety property 1: auto_merge only when every safety precondition holds
+        if decision.allowed_action == "auto_merge":
+            if not (
+                verdict == "SATISFIED"
+                and mode == "auto_merge"
+                and has_verified_diff
+                and not eval_changed
+                and scope == "all_specs"
+                and all_crit_ok
+            ):
+                if len(reflect_violations) < 3:
+                    reflect_violations.append(
+                        {
+                            "description": "evaluate_reflect_gate allowed auto_merge without all safety preconditions",
+                            "meta": run_data | {"decision": decision.to_dict()},
+                        }
+                    )
+
+        # Safety property 2: non-SATISFIED or observe_only must always be blocked
+        if (verdict != "SATISFIED" or mode == "observe_only") and decision.allowed_action != "blocked":
+            if len(reflect_violations) < 3:
+                reflect_violations.append(
+                    {
+                        "description": f"expected blocked for verdict={verdict}, mode={mode}, got {decision.allowed_action}",
+                        "meta": run_data | {"decision": decision.to_dict()},
+                    }
+                )
+
+        # Safety property 3: propose_pr / auto_merge never allowed without verified_commit diff
+        if decision.allowed_action in ("propose_pr", "auto_merge") and not has_verified_diff:
+            if len(reflect_violations) < 3:
+                reflect_violations.append(
+                    {
+                        "description": f"allowed {decision.allowed_action} without verified_commit diff",
+                        "meta": run_data | {"decision": decision.to_dict()},
+                    }
+                )
+
+    return {
+        "guard_states_checked": guard_states,
+        "reflect_states_checked": reflect_states,
+        "guard_violations": guard_violations,
+        "reflect_violations": reflect_violations,
+    }
+
+
 def main() -> int:
     started = time.monotonic()
     engine_res = check_engine_invariants()
     deleg_res = check_delegation_monotonicity()
+    extra_res = check_guard_and_reflect_invariants()
     elapsed = round(time.monotonic() - started, 3)
 
     all_violations = dict(engine_res["violations"])
     all_violations["INV-DELEGATION-MONOTONICITY"] = deleg_res["violations"]
+    all_violations["INV-GUARD-PATH-SOUNDNESS"] = extra_res["guard_violations"]
+    all_violations["INV-REFLECT-GATE-SOUNDNESS"] = extra_res["reflect_violations"]
     failed = {k: v for k, v in all_violations.items() if v}
 
+    total_states = (
+        engine_res["states_checked"]
+        + deleg_res["states_checked"]
+        + extra_res["guard_states_checked"]
+        + extra_res["reflect_states_checked"]
+    )
     summary = {
         "verifier": "bounded-exhaustive-python-real-code",
         "python_version": sys.version.split()[0],
         "duration_sec": elapsed,
         "engine_scenarios_checked": engine_res["states_checked"],
         "delegation_combinations_checked": deleg_res["states_checked"],
-        "total_states_checked": engine_res["states_checked"] + deleg_res["states_checked"],
+        "guard_path_combinations_checked": extra_res["guard_states_checked"],
+        "reflect_gate_combinations_checked": extra_res["reflect_states_checked"],
+        "total_states_checked": total_states,
         "invariants": {
             name: ("FAILED" if viols else "PROVED_WITHIN_BOUNDS")
             for name, viols in all_violations.items()
         },
         "counterexamples": failed,
     }
+
+    evidence_dir = os.environ.get("GARDEN_EVIDENCE_DIR")
+    if evidence_dir:
+        ev_path = Path(evidence_dir) / "formal.json"
+        ev_path.parent.mkdir(parents=True, exist_ok=True)
+        formal_payload = {
+            "schema_version": 1,
+            "tool": "python-exhaustive",
+            "tool_version": sys.version.split()[0],
+            "model_path": ".agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py",
+            "invariants": ["INV-001", "INV-002"],
+            "assumptions": [
+                "bounded engine transition space (max_retries<=2, 2 checks)",
+                "bounded delegation override space (45,927 combinations)",
+                f"bounded glob path matrix ({extra_res['guard_states_checked']} cases) and reflect gate matrix ({extra_res['reflect_states_checked']} cases)",
+            ],
+            "scope": f"bounded exhaustive real-code verification ({total_states} states)",
+            "completed": True,
+            "result": "counterexample_found" if failed else "proved",
+            "counterexample": failed if failed else None,
+        }
+        ev_path.write_text(
+            json.dumps(formal_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 1 if failed else 0
 

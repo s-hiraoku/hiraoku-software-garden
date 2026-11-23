@@ -1,0 +1,80 @@
+name: Garden Self-Dogfood
+
+on:
+  pull_request:
+    paths:
+      - ".garden/**"
+      - "docs/specs/**"
+      - ".github/workflows/garden-dogfood.yml"
+      - ".agents/skills/formal-verify-garden-engine/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch trusted approval branch (main)
+        run: git fetch origin main:refs/remotes/origin/main || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Nursery's own Garden flow with trusted CLI from origin/main
+        id: dogfood_run
+        continue-on-error: true
+        run: |
+          set +e
+          OUT_JSON="${RUNNER_TEMP}/dogfood-run.json"
+          if git cat-file -e origin/main:docs/specs/nursery-cli.md 2>/dev/null; then
+            # Execute the trusted Nursery CLI extracted from origin/main outside the PR checkout
+            # so a PR modifying src/garden/ cannot judge itself with its own engine/guard logic.
+            TRUSTED_CLI="${RUNNER_TEMP}/garden-trusted-cli"
+            rm -rf "${TRUSTED_CLI}"
+            mkdir -p "${TRUSTED_CLI}"
+            git archive origin/main | tar -x -C "${TRUSTED_CLI}"
+
+            python3 "${TRUSTED_CLI}/garden.py" run verify_all \
+              --target . \
+              --approval-branch main \
+              --trigger-event "${GITHUB_EVENT_NAME}" \
+              --trigger-id "garden-dogfood" \
+              --json > "${OUT_JSON}"
+            EC=$?
+          else
+            # Initial onboarding PR before docs/specs/nursery-cli.md lands on main:
+            # Verify Trust Anchor cleanly rejects unapproved initial spec with exit code 4.
+            python3 garden.py run verify_all \
+              --target . \
+              --approval-branch main \
+              --json > "${OUT_JSON}"
+            PRE_EC=$?
+            if [ "${PRE_EC}" -ne 4 ]; then
+              echo "expected exit code 4 (spec_not_approved) before initial spec merges to main, got ${PRE_EC}" >&2
+              EC=1
+            else
+              EC=0
+            fi
+          fi
+          cat "${OUT_JSON}"
+          echo "exit_code=${EC}" >> "${GITHUB_OUTPUT}"
+          RUN_DIR=$(python3 -c "import json, pathlib; p=pathlib.Path('${OUT_JSON}'); d=json.loads(p.read_text()) if p.is_file() and p.read_text().strip() else {}; print(d.get('run_dir') or '')")
+          echo "run_dir=${RUN_DIR}" >> "${GITHUB_OUTPUT}"
+          exit "${EC}"
+
+      - name: Upload Dogfood Run Artifacts
+        if: always() && steps.dogfood_run.outputs.run_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursery-dogfood-run-${{ github.run_id }}
+          path: ${{ steps.dogfood_run.outputs.run_dir }}
+
+      - name: Enforce verdict exit code
+        if: always()
+        run: exit "${{ steps.dogfood_run.outputs.exit_code }}"
