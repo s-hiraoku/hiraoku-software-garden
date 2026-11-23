@@ -30,8 +30,11 @@
 | 用語 | 定義 | 使い分け・注意 | 出典 |
 | --- | --- | --- | --- |
 | カタログ（ナーサリー直下の `garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| ガーデン定義（対象リポジトリ直下の `garden.toml`） | そのガーデンで採用したテンプレートの版、製品仕様の場所、トリガーと検証手順などを記す設定。 | 設計段階。現行の CLI が読むカタログはナーサリー側で管理する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
-| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | 設計例では `checks` に実行するチェックの名前を並べる。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
+| ガーデン定義（対象リポジトリの `.garden/garden.toml`） | そのガーデンで採用したテンプレート・共通の開発ハーネス・対象固有のハーネスの版、製品仕様の場所、委譲範囲、トリガーとフローを記す設定。 | 設計段階（未実装）。ナーサリー直下のカタログ（`garden.toml`）と配置を分けて衝突を防ぐ。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
+| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | 詳細設計では `check`・`agent`・`gate`・`report` の型付きステップと失敗時遷移を決定論的ステートマシンで実行する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
+| 実行記録（Run Artifacts） | フロー1回分の実行結果・版情報・ステップ別ログ・証拠・要約を `.garden/runs/<run-id>/` にまとめた構造化出力。 | ローカル実行と GitHub Actions Artifacts で同一レイアウトを使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
+| 冪等キー | 対象リポジトリ・コミット・トリガー・フロー・承認済み仕様の blob SHA から算出する識別子。 | 同じ事象の再送による重複実行を防ぐために使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
+| 介入レコード | 人が手直しや切り分けを行った理由（分類コード）と再発防止チェックへの落とし込み状態を記録する構造化データ。 | 工程⑦の改善判断に使う。設計段階（未実装）。 | [詳細設計書](docs/implementation/detailed-design.md) |
 | リポジトリ ID | カタログ上の安定した識別子（`<repo-id>`）。`check` の引数に渡す。 | リポジトリ名と一致していなくてもよい。 | [AGENTS.md](AGENTS.md) |
 | ワークスペース | カタログの `path` を解決する基準ディレクトリ。既定はナーサリーの親ディレクトリ（`--workspace`）。 | ナーサリーと対象リポジトリを同じ親に並べる前提。 | [garden.py](garden.py) |
 | チェック（登録済みチェック） | 対象リポジトリで既に使っている自動チェックのコマンド。カタログの `check` に引数の配列で登録し、作業ツリーのルートで実行する。 | 「検証」の一部だが同義ではない。チェックは終了コードで合否が決まるコマンド。 | [docs/implementation/README.md](docs/implementation/README.md) |

@@ -17,5 +17,6 @@
 ## 文書案内
 
 - 仕様の承認、実行と検証、テンプレートの運用方針をまとめています。[ソフトウェアガーデン設計書](docs/implementation/design.md)
+- アーキテクチャ、`.garden/garden.toml` スキーマ、ステートマシン、プロトコル、CLI 仕様をまとめています。[ソフトウェアガーデン詳細設計書](docs/implementation/detailed-design.md)
 - 検証環境を整え、再発する問題をチェックに変え、信頼できる手順から自動化を広げます。[開発と検証の進め方](docs/implementation/README.md)
 - 背景にある実践や共有資料を参照できます。[ドキュメント案内](docs/README.md)
