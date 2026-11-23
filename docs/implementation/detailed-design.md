@@ -3,8 +3,8 @@
 この文書は、[ソフトウェアガーデン設計書](design.md) の方針と7工程の流れを、そのまま実装と検証に着手できる水準の仕様（アーキテクチャ、ファイル配置、スキーマ、ステートマシン、プロトコル、CLI、マイルストーン）に落とし込んだものです。用語は [用語集](../../GLOSSARY.md) に従います。
 
 > **現在地（実装済みと未実装の区別）**
-> - **実装済み**: ナーサリー直下のカタログ（`garden.toml`）を読み込む `garden.py`（`list` / `check`）と `test_garden.py`。
-> - **未実装（本書の対象）**: Python パッケージ構成、`.garden/garden.toml`（ガーデン定義）、仕様パーサーと承認照合、決定論的ステートマシン実行エンジン、2層判定・Run Artifacts、エージェントアダプター、テンプレートと pstack マニフェスト、GitHub Actions 連携。
+> - **実装済み（MVP-1〜MVP-3）**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・互換シム `garden.py`）、カタログ（`list` / `check`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサーと承認ブランチ Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・2層判定・Worktree 分離・冪等スキップ・`Run Artifacts`）、エージェントアダプター契約と事後ガード（`guard.py`）、介入レコード（`garden feedback`）、`garden report`、`harnesses/pstack.toml`、`templates/cli/v1/` と `garden init` / `upgrade`、再利用可能 GitHub Actions ワークフロー（`.github/workflows/garden-reusable.yml`）、および自動テスト群（`test_garden.py`・`tests/`）。
+> - **未実装（今後の対象）**: MVP-4（1号目の実対象リポジトリへの導入と設計書 §6 の3条件実証）、および `cli` 以外のテンプレート型（`web-frontend` / `http-api` / `library`）。
 
 ---
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ### 1.2 ナーサリーのディレクトリ構成（実装目標）
 
-Python 3.11 以上を対象とし、標準ライブラリ中心（外部依存は最小限）のパッケージ構成に移行します。既存の `python3 garden.py list` / `check` は、ルート直下の薄いエントリポイント（シム）で後方互換を維持します。なお、`python3 garden.py` 実行時はリポジトリルートが `sys.path[0]` に入り、単純な `import garden` では `src/garden/` ではなく `garden.py` 自身を読み込んで衝突するため、シム側で `sys.path` からリポジトリルートを外し `src/` を先頭へ挿入したうえで `garden.cli:main` へ委譲します。
+Python 3.11 以上を対象とし、標準ライブラリ中心（外部依存は最小限）のパッケージ構成に移行します。既存の `python3 garden.py list` / `check` は、ルート直下の薄いエントリポイント（シム）で後方互換を維持します。なお、`python3 garden.py` 実行時やリポジトリルートからの `unittest` 起動時はルートが `sys.path[0]` に入り、単純な `import garden` では `src/garden/` ではなく `garden.py` 自身を読み込んで衝突するため、シム側で `__path__` に `src/garden/` を公開したうえで `garden.cli:main` へ委譲します。
 
 ```text
 hiraoku-software-garden/
@@ -438,7 +438,8 @@ stateDiagram-v2
   - `scope = "flow_checks"`（既定）: そのフローのステップ・`gate` で参照する `active` チェックの `covers` に含まれる条件 ID のみを評価対象とする（部分検証・定期回帰フロー向け）。評価対象外の条件は `not_evaluated` として記録し、`INCONCLUSIVE` の原因にしない。
   - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。収穫通知（`kind = "harvest"`）および自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。
 - **受け入れ条件（`AC-*` / `INV-*`）単位の判定**（評価対象 ID ごと）:
-  - その ID を `covers` に含み当該フローで実行された `active` チェックが 0 件 → `inconclusive`（未検証）
+  - 先行ステップの失敗・中断・人判断待ちによってフローが途中終了し、当該条件のチェックが実行されなかった場合 → `not_evaluated`（先行する `UNSATISFIED` / `ABORTED` / `NEEDS_HUMAN` を `INCONCLUSIVE` で上書きしない）
+  - フローが完走したにもかかわらず、その ID を `covers` に含み実行された `active` チェックが 0 件 → `inconclusive`（未検証）
   - 紐づく実行済みチェックに1件でも `inconclusive` がある → `inconclusive`
   - `inconclusive` がなく、1件でも `failed` がある → `unsatisfied`
   - 紐づくすべての実行済みチェックが `passed` → `satisfied`

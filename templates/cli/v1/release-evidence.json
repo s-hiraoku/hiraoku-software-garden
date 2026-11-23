@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "template": "cli",
+  "version": 1,
+  "verified_by": "tests/test_templates.py",
+  "checks": [
+    {
+      "scenario": "fresh_init_pass_and_fail_detection",
+      "description": "garden init -> approve spec -> garden doctor -> garden run (SATISFIED on pass, UNSATISFIED on fail)",
+      "status": "verified_in_ci"
+    },
+    {
+      "scenario": "upgrade_preserves_custom_checks_and_proposes_new_checks",
+      "description": "v1 (with operator custom check) -> v2 upgrade retains custom check and adds new template check as status='proposed'",
+      "status": "verified_in_ci"
+    }
+  ]
+}

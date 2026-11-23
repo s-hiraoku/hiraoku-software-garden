@@ -1,0 +1,29 @@
+schema_version = 1
+name = "cli"
+version = 1
+summary = "CLI ツール向けガーデンテンプレート（入力・出力・終了コード・副作用を検証）"
+
+[detect]
+files_any = ["pyproject.toml", "Cargo.toml", "package.json", "go.mod"]
+keywords_any = ["[project.scripts]", "[[bin]]", "\"bin\"", "argparse", "cobra", "clap"]
+
+[common_harness]
+name = "pstack"
+ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
+
+[defaults.delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 1
+max_duration_sec = 600
+max_cost_usd = 3.0
+
+[defaults.checks.smoke]
+kind = "check"
+command = ["python3", "-c", "print('replace with CLI smoke check')"]
+timeout_sec = 120
+covers = ["AC-001"]
+inconclusive_exit_codes = [75]
+status = "active"

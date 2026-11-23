@@ -1,0 +1,109 @@
+name: Garden Reusable Verification Workflow
+
+on:
+  workflow_call:
+    inputs:
+      flow:
+        description: "Garden flow name defined in .garden/garden.toml"
+        required: true
+        type: string
+      issue_number:
+        description: "Issue or PR number for reporting and label transitions (0 to skip)"
+        required: false
+        type: number
+        default: 0
+      force:
+        description: "Force re-execution even if an identical SATISFIED run exists"
+        required: false
+        type: boolean
+        default: false
+      nursery_ref:
+        description: "Git ref of hiraoku-software-garden to use for the CLI"
+        required: false
+        type: string
+        default: "main"
+
+concurrency:
+  group: garden-${{ inputs.flow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-garden:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch approval branch (main)
+        run: git fetch origin main:refs/remotes/origin/main || true
+
+      - name: Checkout Nursery CLI
+        uses: actions/checkout@v4
+        with:
+          repository: s-hiraoku/hiraoku-software-garden
+          ref: ${{ inputs.nursery_ref }}
+          path: .garden-nursery
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Garden flow
+        id: garden_run
+        continue-on-error: true
+        env:
+          FLOW_NAME: ${{ inputs.flow }}
+          FORCE_RUN: ${{ inputs.force }}
+          ISSUE_NUM: ${{ inputs.issue_number }}
+        run: |
+          set +e
+          mkdir -p .garden
+          ARGS=(
+            python3 .garden-nursery/garden.py run "${FLOW_NAME}"
+            --target .
+            --trigger-event "${GITHUB_EVENT_NAME}"
+            --trigger-id "${GITHUB_WORKFLOW}"
+            --no-worktree
+            --json
+          )
+          if [ "${ISSUE_NUM}" != "0" ] && [ -n "${ISSUE_NUM}" ]; then
+            ARGS+=(--issue "${ISSUE_NUM}")
+          fi
+          if [ "${FORCE_RUN}" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          "${ARGS[@]}" > .garden/last-run.json
+          EXIT_CODE=$?
+          echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
+          RUN_DIR=$(python3 -c "import json, pathlib
+p = pathlib.Path('.garden/last-run.json')
+try:
+    d = json.loads(p.read_text(encoding='utf-8'))
+    print(d.get('run_dir') or '')
+except Exception:
+    print('')")
+          echo "run_dir=${RUN_DIR}" >> "${GITHUB_OUTPUT}"
+          exit "${EXIT_CODE}"
+
+      - name: Upload Run Artifacts
+        if: always() && steps.garden_run.outputs.run_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: garden-run-${{ inputs.flow }}-${{ github.run_id }}
+          path: ${{ steps.garden_run.outputs.run_dir }}
+
+      - name: Post report to GitHub Issue / PR
+        if: always() && inputs.issue_number != 0 && steps.garden_run.outputs.run_dir != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .garden-nursery/garden.py report \
+            "${{ steps.garden_run.outputs.run_dir }}" \
+            --post-github-issue "${{ inputs.issue_number }}"
+
+      - name: Propagate deterministic verdict exit code
+        if: always()
+        run: exit "${{ steps.garden_run.outputs.exit_code }}"
