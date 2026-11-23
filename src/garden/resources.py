@@ -15,6 +15,9 @@ def nursery_root() -> Path:
     are shipped inside the package under ``garden/_nursery/``.
     """
     checkout_root = _PKG_DIR.parents[1]
-    if (checkout_root / "templates").is_dir():
+    # 無関係な templates/ を誤って拾わないよう、ナーサリー固有のファイルも合わせて確認する
+    if (checkout_root / "templates").is_dir() and (
+        checkout_root / "harnesses" / "pstack.toml"
+    ).is_file():
         return checkout_root
     return _PKG_DIR / "_nursery"
