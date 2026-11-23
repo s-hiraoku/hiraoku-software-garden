@@ -187,3 +187,82 @@ check = "operator_custom"
             run_proc = run_cli("run", "verify_only", "--target", str(repo), "--json")
             self.assertEqual(run_proc.returncode, 0, run_proc.stderr)
             self.assertEqual(json.loads(run_proc.stdout)["verdict"], "SATISFIED")
+
+    def test_all_four_templates_autodetect_init_doctor_and_run_pass_and_fail(self):
+        cases = [
+            (
+                "cli",
+                "sample-cli",
+                {"pyproject.toml": '[project]\nname="x"\n[project.scripts]\nx="x:main"\n'},
+                "replace with CLI smoke check",
+            ),
+            (
+                "web-frontend",
+                "sample-web",
+                {"package.json": '{"name":"w","dependencies":{"react":"^19.0.0","vite":"^6.0.0"}}'},
+                "replace with Playwright/UI smoke check",
+            ),
+            (
+                "http-api",
+                "sample-api",
+                {"pyproject.toml": '[project]\nname="a"\ndependencies=["fastapi"]\n', "openapi.yaml": "openapi: 3.1.0\n"},
+                "replace with HTTP API contract check",
+            ),
+            (
+                "library",
+                "sample-lib",
+                {"pyproject.toml": '[build-system]\nrequires=["setuptools"]\n[project]\nname="lib"\n'},
+                "replace with public API contract check",
+            ),
+        ]
+        for expected_type, repo_name, seed_files, placeholder in cases:
+            with self.subTest(template=expected_type):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = init_target_repo(Path(tmp) / repo_name)
+                    for rel, content in seed_files.items():
+                        (repo / rel).write_text(content, encoding="utf-8")
+                    commit_all(repo, f"seed {expected_type}")
+
+                    init_proc = run_cli("init", "--target", str(repo))
+                    self.assertEqual(init_proc.returncode, 0, init_proc.stderr)
+                    init_out = json.loads(init_proc.stdout)
+                    self.assertEqual(init_out["template"], expected_type)
+                    self.assertEqual(init_out["version"], 1)
+
+                    spec_path = repo / "docs" / "specs" / f"{repo_name}.md"
+                    spec_path.write_text(
+                        spec_path.read_text(encoding="utf-8").replace(
+                            "status: draft", "status: approved"
+                        ),
+                        encoding="utf-8",
+                    )
+                    gpath = repo / ".garden" / "garden.toml"
+                    gpath.write_text(
+                        gpath.read_text(encoding="utf-8").replace(
+                            'covers = ["AC-001"]', 'covers = ["AC-001", "INV-001"]'
+                        ),
+                        encoding="utf-8",
+                    )
+                    commit_all(repo, "approve spec")
+
+                    doc_proc = run_cli(
+                        "doctor", "--target", str(repo), "--skip-network", "--json"
+                    )
+                    self.assertEqual(doc_proc.returncode, 0, doc_proc.stdout + doc_proc.stderr)
+
+                    ok_proc = run_cli("run", "verify_only", "--target", str(repo), "--json")
+                    self.assertEqual(ok_proc.returncode, 0, ok_proc.stderr)
+                    self.assertEqual(json.loads(ok_proc.stdout)["verdict"], "SATISFIED")
+
+                    gpath.write_text(
+                        gpath.read_text(encoding="utf-8").replace(
+                            f"print('{placeholder}')", "import sys; sys.exit(1)"
+                        ),
+                        encoding="utf-8",
+                    )
+                    commit_all(repo, "break check")
+                    fail_proc = run_cli(
+                        "run", "verify_only", "--target", str(repo), "--force", "--json"
+                    )
+                    self.assertEqual(fail_proc.returncode, 1)
+                    self.assertEqual(json.loads(fail_proc.stdout)["verdict"], "UNSATISFIED")

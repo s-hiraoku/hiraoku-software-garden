@@ -186,7 +186,7 @@ class _ScenarioHarness:
         self.events = []
         self.recorded_steps = []
 
-    def fake_trust_anchor(self, _root: Path) -> TrustAnchorResult:
+    def fake_trust_anchor(self, _root: Path, **_kwargs: Any) -> TrustAnchorResult:
         assert self.anchor is not None
         return self.anchor
 
@@ -269,6 +269,7 @@ def check_engine_invariants() -> dict[str, Any]:
             patch("garden.engine.list_remotes", return_value={"origin": "https://example.invalid/r.git"}),
             patch("garden.engine.head_commit", return_value="e" * 40),
             patch("garden.engine.is_dirty", return_value=False),
+            patch("garden.engine.list_untracked_files", return_value=set()),
             patch("garden.engine.verify_trust_anchor", side_effect=h.fake_trust_anchor),
             patch("garden.engine.run_check", side_effect=h.fake_run_check),
             patch("garden.engine.run_mock_adapter", side_effect=h.fake_mock_adapter),

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from garden.definition import DelegationConfig
-from garden.guard import verify_post_agent_guard
+from garden.guard import list_untracked_files, match_glob, verify_post_agent_guard
 from tests.helpers import commit_all, git, init_target_repo
 
 
@@ -80,3 +80,32 @@ class PostAgentGuardTests(unittest.TestCase):
             self.assertTrue(any("agent_cost_limit_exceeded" in v for v in guard.violations))
             self.assertTrue(any("flow_cost_limit_exceeded" in v for v in guard.violations))
             self.assertTrue(any("duration_limit_exceeded" in v for v in guard.violations))
+
+    def test_match_glob_preserves_leading_dot_in_hidden_directories(self):
+        self.assertTrue(match_glob(".garden/garden.toml", ".garden/**"))
+        self.assertTrue(match_glob("./.garden/garden.toml", ".garden/**"))
+        self.assertFalse(match_glob("garden/x.py", ".garden/**"))
+        self.assertFalse(match_glob("github/workflows/a.yml", ".github/workflows/**"))
+        self.assertTrue(match_glob(".github/workflows/a.yml", ".github/workflows/**"))
+
+    def test_baseline_untracked_and_ignore_prefixes_do_not_trigger_false_positives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base_commit = self._make_repo(tmp)
+            # Pre-existing untracked scratch file (e.g., CI workspace tooling)
+            (repo / ".garden-nursery").mkdir()
+            (repo / ".garden-nursery" / "garden.py").write_text("# cli\n", encoding="utf-8")
+            baseline = list_untracked_files(repo)
+
+            # Run artifacts written during this run under ignore_prefixes
+            (repo / ".garden" / "runs" / "r1").mkdir(parents=True)
+            (repo / ".garden" / "runs" / "r1" / "run.json").write_text("{}", encoding="utf-8")
+
+            guard = verify_post_agent_guard(
+                repo,
+                base_commit,
+                self._delegation(),
+                baseline_untracked=baseline,
+                ignore_prefixes=(".garden/runs/r1/",),
+            )
+            self.assertTrue(guard.ok, guard.violations)
+            self.assertEqual(guard.changed_files, ())

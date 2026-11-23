@@ -1,0 +1,58 @@
+schema_version = 1
+
+[template]
+name = "web-frontend"
+version = 1
+
+[common_harness]
+name = "pstack"
+ref = "{pstack_ref}"
+skills = ["create-verification-skill", "maintain-verification-skill"]
+
+[target_harness]
+name = "{repo_name}-web-harness"
+version = 1
+
+[spec]
+paths = ["docs/specs/{spec_id}.md"]
+approval_branch = "main"
+
+[delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 1
+max_duration_sec = 900
+max_cost_usd = 4.0
+require_checks = ["ui_smoke"]
+
+[checks.ui_smoke]
+kind = "check"
+command = ["python3", "-c", "print('replace with Playwright/UI smoke check')"]
+timeout_sec = 300
+covers = ["AC-001"]
+inconclusive_exit_codes = [75]
+status = "active"
+
+[[triggers]]
+id = "pr-verify"
+event = "pull_request"
+flow = "verify_only"
+[triggers.conditions]
+actions = ["opened", "synchronize"]
+
+[flows.verify_only]
+description = "承認済み仕様に基づき、変更を加えず画面操作と表示状態を検証する"
+scope = "all_specs"
+
+[[flows.verify_only.steps]]
+id = "run_ui_smoke"
+type = "check"
+check = "ui_smoke"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+
+[[flows.verify_only.steps]]
+id = "emit_report"
+type = "report"
+kind = "auto"

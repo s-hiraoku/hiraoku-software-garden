@@ -100,6 +100,7 @@ def run_doctor(
     *,
     nursery_root: Path | None = None,
     skip_network: bool = False,
+    approval_branch: str = "main",
 ) -> tuple[int, list[DiagnosticItem]]:
     """Run all 7 diagnostic checks. Returns (exit_code, items)."""
     items: list[DiagnosticItem] = []
@@ -148,7 +149,7 @@ def run_doctor(
 
     # 3. Specs & approval branch trust anchor
     try:
-        anchor = verify_trust_anchor(root)
+        anchor = verify_trust_anchor(root, approval_branch=approval_branch)
         if anchor.specs_approved and not anchor.evaluation_criteria_changed:
             items.append(
                 DiagnosticItem(

@@ -1,4 +1,4 @@
-"""External CLI adapter implementing the file-based JSON agent protocol."""
+"""External CLI adapter implementing the file-based and provider-stdout JSON agent protocol."""
 
 from __future__ import annotations
 
@@ -8,7 +8,15 @@ from pathlib import Path
 import subprocess
 
 from garden.adapters.base import AgentRequest, AgentResponse, load_agent_response
+from garden.adapters.providers import (
+    build_agent_prompt,
+    parse_provider_stdout,
+    prepare_provider_command,
+)
 from garden.definition import AgentConfig
+
+
+PROVIDER_ADAPTERS = ("codex", "claude", "antigravity")
 
 
 def run_command_adapter(
@@ -21,6 +29,7 @@ def run_command_adapter(
     step_dir.mkdir(parents=True, exist_ok=True)
     req_path = step_dir / "request.json"
     res_path = step_dir / "response.json"
+    prompt_path = step_dir / "prompt.md"
     stdout_file = step_dir / "stdout.log"
     stderr_file = step_dir / "stderr.log"
 
@@ -28,17 +37,23 @@ def run_command_adapter(
         json.dumps(request.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    prompt_text = build_agent_prompt(request)
+    prompt_path.write_text(prompt_text, encoding="utf-8")
 
     env = os.environ.copy()
     env["GARDEN_AGENT_REQUEST"] = str(req_path.resolve())
     env["GARDEN_AGENT_RESPONSE"] = str(res_path.resolve())
+    env["GARDEN_AGENT_PROMPT"] = str(prompt_path.resolve())
     env["GARDEN_WORKTREE"] = str(worktree.resolve())
+
+    argv, stdin_text = prepare_provider_command(agent.adapter, agent.command, prompt_text)
 
     try:
         proc = subprocess.run(
-            list(agent.command),
+            argv,
             cwd=worktree,
             env=env,
+            input=stdin_text,
             capture_output=True,
             text=True,
             timeout=agent.timeout_sec,
@@ -74,7 +89,17 @@ def run_command_adapter(
     stdout_file.write_text(proc.stdout, encoding="utf-8")
     stderr_file.write_text(proc.stderr, encoding="utf-8")
 
-    response = load_agent_response(res_path)
+    if res_path.is_file():
+        response = load_agent_response(res_path)
+    elif agent.adapter in PROVIDER_ADAPTERS:
+        response = parse_provider_stdout(agent.adapter, proc.stdout, proc.returncode)
+        res_path.write_text(
+            json.dumps(response.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        response = load_agent_response(res_path)
+
     if proc.returncode != 0 and response.outcome == "completed":
         response = AgentResponse(
             outcome="failed",

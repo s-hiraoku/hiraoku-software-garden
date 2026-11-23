@@ -1,9 +1,10 @@
-"""Report generation and GitHub Issue/PR comment & label transition helper."""
+"""Report generation, HTML marker parsing, and GitHub Issue/PR comment & label transitions."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -16,6 +17,60 @@ KIND_TO_LABEL = {
     "escalation": "garden:needs-human",
 }
 MANAGED_LABELS = ("garden:running", "garden:needs-human", "garden:harvest-ready")
+MARKER_RE = re.compile(r"<!--\s*garden:v1\s+([^>]+?)\s*-->")
+KV_RE = re.compile(r"([a-zA-Z0-9_]+)=([^\s]+)")
+
+
+def parse_garden_markers(text: str) -> list[dict[str, str]]:
+    """Extract all `<!-- garden:v1 key=value ... -->` markers from comment text."""
+    markers: list[dict[str, str]] = []
+    for match in MARKER_RE.finditer(text):
+        pairs = dict(KV_RE.findall(match.group(1)))
+        if pairs:
+            markers.append(pairs)
+    return markers
+
+
+def find_satisfied_marker(
+    comments: list[str], idempotency_key: str
+) -> dict[str, str] | None:
+    """Return the most recent SATISFIED marker matching idempotency_key, if any."""
+    for body in reversed(comments):
+        for marker in reversed(parse_garden_markers(body)):
+            if (
+                marker.get("idempotency_key") == idempotency_key
+                and marker.get("verdict") == "SATISFIED"
+            ):
+                return marker
+    return None
+
+
+def fetch_github_issue_comments(
+    issue_number: int, *, cwd: Path | None = None
+) -> list[str]:
+    """Fetch comment bodies from a GitHub Issue or PR using `gh issue view`."""
+    proc = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--json", "comments"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return []
+    raw_comments = data.get("comments") if isinstance(data, dict) else []
+    if not isinstance(raw_comments, list):
+        return []
+    return [
+        str(item.get("body") or "")
+        for item in raw_comments
+        if isinstance(item, dict)
+    ]
 
 
 def load_run_data(run_dir: Path) -> dict[str, Any]:

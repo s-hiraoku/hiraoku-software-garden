@@ -17,8 +17,15 @@ class GuardResult:
     changed_files: tuple[str, ...]
 
 
+def _strip_dot_slash(path_str: str) -> str:
+    norm = path_str.replace("\\", "/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm
+
+
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    norm = pattern.replace("\\", "/").lstrip("./")
+    norm = _strip_dot_slash(pattern)
     parts: list[str] = ["^"]
     i = 0
     n = len(norm)
@@ -46,11 +53,29 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 
 
 def match_glob(path_str: str, pattern: str) -> bool:
-    norm = path_str.replace("\\", "/").lstrip("./")
+    norm = _strip_dot_slash(path_str)
     return _glob_to_regex(pattern).match(norm) is not None
 
 
-def collect_changes_since(worktree: Path, target_commit: str) -> tuple[bool, tuple[str, ...]]:
+def list_untracked_files(worktree: Path) -> set[str]:
+    status = git_run(
+        worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all", text=False
+    )
+    untracked: set[str] = set()
+    if status.returncode == 0 and status.stdout:
+        for raw_entry in status.stdout.split(b"\x00"):
+            if raw_entry.startswith(b"?? "):
+                untracked.add(raw_entry[3:].decode("utf-8", errors="replace"))
+    return untracked
+
+
+def collect_changes_since(
+    worktree: Path,
+    target_commit: str,
+    *,
+    baseline_untracked: set[str] | None = None,
+    ignore_prefixes: tuple[str, ...] = (),
+) -> tuple[bool, tuple[str, ...]]:
     """Return (ancestor_ok, all_changed_and_untracked_paths) since target_commit."""
     anc = git_run(worktree, "merge-base", "--is-ancestor", target_commit, "HEAD")
     if anc.returncode != 0:
@@ -64,12 +89,14 @@ def collect_changes_since(worktree: Path, target_commit: str) -> tuple[bool, tup
             if raw_entry:
                 changed.append(raw_entry.decode("utf-8", errors="replace"))
 
-    # Untracked files (all, NUL-delimited)
-    status = git_run(worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all", text=False)
-    if status.returncode == 0 and status.stdout:
-        for raw_entry in status.stdout.split(b"\x00"):
-            if raw_entry.startswith(b"?? "):
-                changed.append(raw_entry[3:].decode("utf-8", errors="replace"))
+    baseline = baseline_untracked or set()
+    for rel_path in sorted(list_untracked_files(worktree)):
+        if rel_path in baseline:
+            continue
+        norm = _strip_dot_slash(rel_path)
+        if any(norm.startswith(prefix) for prefix in ignore_prefixes):
+            continue
+        changed.append(rel_path)
 
     return True, tuple(dict.fromkeys(changed))
 
@@ -83,10 +110,17 @@ def verify_post_agent_guard(
     agent_max_cost_usd: float | None = None,
     cumulative_cost_usd: float = 0.0,
     elapsed_sec: float = 0.0,
+    baseline_untracked: set[str] | None = None,
+    ignore_prefixes: tuple[str, ...] = (),
 ) -> GuardResult:
     violations: list[str] = []
 
-    ancestor_ok, changed_files = collect_changes_since(worktree, target_commit)
+    ancestor_ok, changed_files = collect_changes_since(
+        worktree,
+        target_commit,
+        baseline_untracked=baseline_untracked,
+        ignore_prefixes=ignore_prefixes,
+    )
     if not ancestor_ok:
         violations.append(
             f"history_rewritten: target_commit {target_commit[:12]} is no longer an ancestor of HEAD"

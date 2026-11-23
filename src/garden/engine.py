@@ -35,7 +35,8 @@ from garden.git_utils import (
     list_remotes,
     repo_root,
 )
-from garden.guard import verify_post_agent_guard
+from garden.guard import list_untracked_files, verify_post_agent_guard
+from garden.report import fetch_github_issue_comments, find_satisfied_marker
 from garden.spec import TrustAnchorResult, verify_trust_anchor
 
 
@@ -251,17 +252,50 @@ def _apply_effective_delegation(
     return eff
 
 
+def resolve_flow_for_trigger(
+    definition: GardenDefinition,
+    *,
+    event: str,
+    action: str | None = None,
+    label: str | None = None,
+) -> tuple[str, str] | None:
+    """Resolve (trigger_id, flow_name) from [[triggers]] for an incoming event."""
+    for trig in definition.triggers:
+        if trig.event != event:
+            continue
+        cond = trig.conditions
+        actions = cond.get("actions")
+        if isinstance(actions, list) and actions:
+            if action not in actions:
+                continue
+        single_action = cond.get("action")
+        if isinstance(single_action, str) and single_action:
+            if action != single_action:
+                continue
+        req_label = cond.get("label")
+        if isinstance(req_label, str) and req_label:
+            if label != req_label:
+                continue
+        return trig.id, trig.flow
+    return None
+
+
 def run_flow(
     target: Path,
     flow_name: str,
     *,
+    approval_branch: str = "main",
     trigger_event: str = "manual",
     trigger_id: str = "manual",
+    trigger_action: str | None = None,
+    trigger_label: str | None = None,
     issue_or_pr: int | None = None,
     force: bool = False,
     keep_worktree: bool = False,
     use_worktree: bool = True,
     include_proposed: bool = False,
+    existing_comments: list[str] | None = None,
+    check_github_markers: bool = False,
 ) -> EngineRunResult:
     started_dt = datetime.now(timezone.utc)
     started_mono = time.monotonic()
@@ -273,8 +307,20 @@ def run_flow(
     dirty_before = is_dirty(root)
 
     # Preflight: load definition & verify approval trust anchor
-    anchor = verify_trust_anchor(root)
+    anchor = verify_trust_anchor(root, approval_branch=approval_branch)
     definition = anchor.active_definition
+    if flow_name == "auto":
+        resolved = resolve_flow_for_trigger(
+            definition,
+            event=trigger_event,
+            action=trigger_action,
+            label=trigger_label,
+        )
+        if resolved is None:
+            raise DefinitionError(
+                f"no matching [[triggers]] entry for event='{trigger_event}' action={trigger_action!r}"
+            )
+        trigger_id, flow_name = resolved
     if flow_name not in definition.flows:
         raise DefinitionError(f"unknown flow '{flow_name}'")
     flow = definition.flows[flow_name]
@@ -303,6 +349,29 @@ def run_flow(
                 run_data=existing_data,
                 skipped_duplicate=True,
             )
+        comments_to_check = list(existing_comments or [])
+        if check_github_markers and issue_or_pr is not None:
+            comments_to_check.extend(
+                fetch_github_issue_comments(issue_or_pr, cwd=root)
+            )
+        if comments_to_check:
+            marker = find_satisfied_marker(comments_to_check, idempotency_key)
+            if marker is not None:
+                return EngineRunResult(
+                    exit_code=0,
+                    verdict="SATISFIED",
+                    run_id=marker.get("run_id", "github-marker"),
+                    run_dir=None,
+                    run_data={
+                        "schema_version": 1,
+                        "run_id": marker.get("run_id", "github-marker"),
+                        "idempotency_key": idempotency_key,
+                        "verdict": "SATISFIED",
+                        "skipped_source": "github_comment_marker",
+                        "marker": marker,
+                    },
+                    skipped_duplicate=True,
+                )
 
     stamp = started_dt.strftime("%Y%m%dT%H%M%SZ")
     run_id = f"{stamp}-{idempotency_key[:8]}"
@@ -427,6 +496,8 @@ def run_flow(
     worktree_path = root
     worktree_branch: str | None = None
     created_worktree = False
+    baseline_untracked: set[str] = set()
+    guard_ignore_prefixes: tuple[str, ...] = ()
     if use_worktree:
         try:
             worktree_path, worktree_branch = _setup_worktree(
@@ -447,6 +518,9 @@ def run_flow(
                 },
                 requested_report_kind="escalation",
             )
+    else:
+        baseline_untracked = list_untracked_files(worktree_path)
+        guard_ignore_prefixes = (f".garden/runs/{run_id}/",)
 
     step_records: list[str] = []
     step_counter = 0
@@ -556,6 +630,8 @@ def run_flow(
             agent_max_cost_usd=agent_cfg.max_cost_usd,
             cumulative_cost_usd=usage_totals["cost_usd"],
             elapsed_sec=elapsed,
+            baseline_untracked=baseline_untracked,
+            ignore_prefixes=guard_ignore_prefixes,
         )
 
         write_step_json(
