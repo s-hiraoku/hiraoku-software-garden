@@ -783,10 +783,12 @@ search_paths = [
 | 導入・保守 | `garden init [--target PATH] [--type TYPE]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
 | 導入・保守 | `garden doctor [--target PATH] [--json]` | 環境・定義・承認仕様・pstack・チェック依存を診断 | `0` error なし / `1` error あり / `2` 定義読込不可 |
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
+| 導入・保守 | `garden template-gate [--type TYPE] [--version N] [--all] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |
 | 実行・記録 | `garden run <flow> [--target PATH] [--trigger-event E] [--trigger-id ID] [--force] [--keep-worktree]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
 | 実行・記録 | `garden report <run-dir> [--format md\|json] [--post-github-issue N]` | `run.json` から要約生成・GitHub Issue/PR への投稿とラベル更新 | `0` 成功 / `1` 投稿失敗 / `2` 入力不正 |
 | 実行・記録 | `garden reflect <run-dir> [--base BRANCH] [--execute]` | 工程⑥の反映ゲート判定（既定ドライラン、`--execute` で PR 作成・条件充足時のみ `--auto` マージ） | `0` 反映許可・なし / `1` ブロック・実行失敗 / `2` 入力不正 |
-| 改善・測定 | `garden feedback add\|summary [--target PATH]` | 人の介入レコードの記録と分類別集計 | `0` 成功 / `2` 入力不正 |
+| 改善・測定 | `garden feedback add\|from-comment\|update\|summary [--target PATH]` | 人の介入レコードの記録（CLI / `/garden feedback` コメント解析）・状態更新・分類別集計 | `0` 成功 / `2` 入力不正 |
+| 改善・測定 | `garden metrics [--target PATH] [--limit N]` | 実行記録と介入レコードから判定率・再試行・再発条件・介入解消率を集計 | `0` 成功 / `2` 入力不正 |
 
 ※ `garden run` の終了コードを `1` (`UNSATISFIED`) / `3` (`INCONCLUSIVE`) / `4` (`NEEDS_HUMAN`) / `5` (`ABORTED`) で分けることで、GitHub Actions 側が「失敗」「判定不能」「人判断待ち」「明示中断」を機械的に分岐・ラベル付けできます。
 

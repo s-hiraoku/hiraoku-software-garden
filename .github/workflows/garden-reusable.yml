@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: "main"
+      reflect:
+        description: "Execute Phase-6 reflection gate (garden reflect --execute) when verdict is SATISFIED"
+        required: false
+        type: boolean
+        default: false
+      base_branch:
+        description: "Base branch for Phase-6 reflection PR creation"
+        required: false
+        type: string
+        default: "main"
 
 concurrency:
   group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
@@ -89,6 +99,7 @@ jobs:
           FLOW_NAME: ${{ inputs.flow }}
           APPROVAL_BRANCH: ${{ inputs.approval_branch }}
           FORCE_RUN: ${{ inputs.force }}
+          REFLECT_ENABLED: ${{ inputs.reflect }}
           ISSUE_NUM: ${{ inputs.issue_number }}
           TRIGGER_ACTION: ${{ github.event.action }}
         run: |
@@ -110,6 +121,9 @@ jobs:
           fi
           if [ "${FORCE_RUN}" = "true" ]; then
             ARGS+=(--force)
+          fi
+          if [ "${REFLECT_ENABLED}" = "true" ]; then
+            ARGS+=(--keep-worktree)
           fi
           "${ARGS[@]}" > "${LAST_RUN_JSON}"
           EXIT_CODE=$?
@@ -144,6 +158,17 @@ PY
           python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
             "${{ steps.garden_run.outputs.run_dir }}" \
             --post-github-issue "${{ inputs.issue_number }}"
+
+      - name: Execute Phase-6 reflection gate
+        if: inputs.reflect && steps.garden_run.outputs.exit_code == '0' && steps.garden_run.outputs.run_dir != '' && steps.garden_run.outputs.skipped_duplicate != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" reflect \
+            "${{ steps.garden_run.outputs.run_dir }}" \
+            --base "${BASE_BRANCH}" \
+            --execute
 
       - name: Propagate deterministic verdict exit code
         if: always()
