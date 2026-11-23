@@ -41,8 +41,16 @@ def check_repository(repo_id, entry, workspace):
         root = Path(git_output(path, "rev-parse", "--show-toplevel")).resolve()
         if root != path:
             raise ValueError(f"expected checkout root, found {root}")
+        remotes = git_output(path, "remote").splitlines()
+        if not any(
+            git_output(path, "remote", "get-url", "--", remote) == entry["remote"]
+            for remote in remotes
+        ):
+            raise ValueError("no Git fetch URL matches the catalog remote")
         result["commit"] = git_output(path, "rev-parse", "HEAD")
-        result["dirty"] = bool(git_output(path, "status", "--porcelain"))
+        result["dirty"] = bool(
+            git_output(path, "status", "--porcelain", "--untracked-files=normal")
+        )
         print(f"[{repo_id}] {path}", file=sys.stderr, flush=True)
         run = subprocess.run(
             entry["check"], cwd=path, stdout=sys.stderr, check=False
