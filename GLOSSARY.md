@@ -29,7 +29,9 @@
 
 | 用語 | 定義 | 使い分け・注意 | 出典 |
 | --- | --- | --- | --- |
-| カタログ（`garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
+| カタログ（ナーサリー直下の `garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
+| ガーデン定義（対象リポジトリ直下の `garden.toml`） | そのガーデンで採用したテンプレートの版、製品仕様の場所、トリガーと検証手順などを記す設定。 | 設計段階。現行の CLI が読むカタログはナーサリー側で管理する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
+| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | 設計例では `checks` に実行するチェックの名前を並べる。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
 | リポジトリ ID | カタログ上の安定した識別子（`<repo-id>`）。`check` の引数に渡す。 | リポジトリ名と一致していなくてもよい。 | [AGENTS.md](AGENTS.md) |
 | ワークスペース | カタログの `path` を解決する基準ディレクトリ。既定はナーサリーの親ディレクトリ（`--workspace`）。 | ナーサリーと対象リポジトリを同じ親に並べる前提。 | [garden.py](garden.py) |
 | チェック（登録済みチェック） | 対象リポジトリで既に使っている自動チェックのコマンド。カタログの `check` に引数の配列で登録し、作業ツリーのルートで実行する。 | 「検証」の一部だが同義ではない。チェックは終了コードで合否が決まるコマンド。 | [docs/implementation/README.md](docs/implementation/README.md) |
@@ -45,11 +47,13 @@
 
 | 用語 | 定義 | 使い分け・注意 | 出典 |
 | --- | --- | --- | --- |
+| 委譲範囲 | ある仕事について、人がガーデンに任せた対象・操作・反映の範囲。 | その範囲を広げるときは人が判断する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
 | 仕様 | 誰のどんな願いをかなえるか、何ができ、何が起きてはいけないかを人が定めたもの。受け入れ条件と不変条件を含む。 | 人が最も力を注ぐ部分。AI が仕様を決められないときは人に問いを返す。 | [docs/philosophy.md](docs/philosophy.md) |
 | 受け入れ条件 | 実際の振る舞いで完成を判断できる条件。検証はここから組み立てる。 | 「完成の条件」「完了条件」とほぼ同義。AI が実装に合わせて作ったテストはこれに含めない。 | [docs/philosophy.md](docs/philosophy.md) |
 | 不変条件 | 常に守るべき性質。仕様に明示し、必要に応じて形式検証で確かめる。 | 「守るべき性質」と同義。人が定める。 | [docs/philosophy.md](docs/philosophy.md) |
 | 検証 | 仕様（受け入れ条件・不変条件）と実際の振る舞いを照らし合わせること。チェック、実行時の確認、形式検証を含む。 | 結果には、どの性質をどんな前提で確かめたかを残す。「テストが通った」だけで検証済みと言わない。 | [docs/philosophy.md](docs/philosophy.md) |
 | 再発防止チェック | 実際の失敗やレビュー指摘を、型、lint、テスト、API 設計に変えて、次は自動で防ぐか検出できるようにしたもの。 | 対象リポジトリに置く。過去の失敗を再現して検出できることを確かめる。 | [docs/implementation/README.md](docs/implementation/README.md) |
+| 判定不能 | 必要な証拠が得られず、受け入れ条件を満たしたか判断できない状態。 | 必須チェックの `unavailable` は一例。チェックを実行できても観察結果が欠ければ判定不能になる。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
 | 証拠 | 確認した条件、手順、結果、未確認の点。レビューや収穫の報告に添える。 | 「動作の証拠」「検証の根拠」も同じ意味。 | [docs/implementation/README.md](docs/implementation/README.md) |
 
 ## 参考事例・外部ツール
