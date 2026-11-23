@@ -1,0 +1,30 @@
+schema_version = 1
+name = "library"
+version = 1
+summary = "ライブラリ向けガーデンテンプレート（公開 API の契約・型・互換性を検証）"
+
+[detect]
+files_any = ["pyproject.toml", "Cargo.toml", "package.json"]
+keywords_any = ["\"exports\"", "[lib]", "[build-system]", "\"main\"", "\"types\""]
+exclude_keywords = ["[project.scripts]", "[[bin]]", "\"bin\"", "\"react\"", "\"next\"", "\"vite\"", "fastapi", "\"express\""]
+
+[common_harness]
+name = "pstack"
+ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
+
+[defaults.delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 1
+max_duration_sec = 600
+max_cost_usd = 3.0
+
+[defaults.checks.public_api]
+kind = "check"
+command = ["python3", "-c", "print('replace with public API contract check')"]
+timeout_sec = 180
+covers = ["AC-001"]
+inconclusive_exit_codes = [75]
+status = "active"

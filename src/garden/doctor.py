@@ -101,6 +101,7 @@ def run_doctor(
     *,
     nursery_root: Path | None = None,
     skip_network: bool = False,
+    approval_branch: str = "main",
 ) -> tuple[int, list[DiagnosticItem]]:
     """Run all 7 diagnostic checks. Returns (exit_code, items)."""
     items: list[DiagnosticItem] = []
@@ -149,7 +150,7 @@ def run_doctor(
 
     # 3. Specs & approval branch trust anchor
     try:
-        anchor = verify_trust_anchor(root)
+        anchor = verify_trust_anchor(root, approval_branch=approval_branch)
         if anchor.specs_approved and not anchor.evaluation_criteria_changed:
             items.append(
                 DiagnosticItem(
@@ -274,10 +275,21 @@ def run_doctor(
             )
         )
 
-    # 7. Approval branch protection check
+    # 7. Approval branch protection check (always uses trusted --approval-branch)
+    if definition.spec.approval_branch != approval_branch:
+        items.append(
+            DiagnosticItem(
+                id="approval_branch_alignment",
+                status="warn",
+                detail=(
+                    f"[spec].approval_branch='{definition.spec.approval_branch}' differs "
+                    f"from trusted --approval-branch='{approval_branch}'"
+                ),
+            )
+        )
     items.append(
         _check_branch_protection(
-            remotes, definition.spec.approval_branch, skip_network=skip_network
+            remotes, approval_branch, skip_network=skip_network
         )
     )
 

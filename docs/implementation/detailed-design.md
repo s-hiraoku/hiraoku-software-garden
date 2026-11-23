@@ -3,8 +3,8 @@
 この文書は、[ソフトウェアガーデン設計書](design.md) の方針と7工程の流れを、そのまま実装と検証に着手できる水準の仕様（アーキテクチャ、ファイル配置、スキーマ、ステートマシン、プロトコル、CLI、マイルストーン）に落とし込んだものです。用語は [用語集](../../GLOSSARY.md) に従います。
 
 > **現在地（実装済みと未実装の区別）**
-> - **実装済み（MVP-1〜MVP-3）**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・互換シム `garden.py`）、カタログ（`list` / `check`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサーと承認ブランチ Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・2層判定・Worktree 分離・冪等スキップ・`Run Artifacts`）、エージェントアダプター契約と事後ガード（`guard.py`）、介入レコード（`garden feedback`）、`garden report`、`harnesses/pstack.toml`、`templates/cli/v1/` と `garden init` / `upgrade`、再利用可能 GitHub Actions ワークフロー（`.github/workflows/garden-reusable.yml`）、および自動テスト群（`test_garden.py`・`tests/`）。
-> - **未実装（今後の対象）**: MVP-4（1号目の実対象リポジトリへの導入と設計書 §6 の3条件実証）、および `cli` 以外のテンプレート型（`web-frontend` / `http-api` / `library`）。
+> - **実装済み（MVP-1〜MVP-3＋実戦投入基盤）**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・互換シム `garden.py`）、カタログ（`list` / `check`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサーと信頼できる承認ブランチ（既定 `main` / CLI・ワークフロー指定）による Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・`[[triggers]]` 自動解決 `auto`・2層判定・Worktree 分離・ローカル＆GitHub HTML マーカー重複スキップ・`Run Artifacts`）、実プロバイダー対応エージェントアダプター（`codex` / `claude` / `antigravity` / `custom` / `mock`）と事後ガード（`guard.py`）、介入レコード（`garden feedback`）、`garden report`、`harnesses/pstack.toml`、全4型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`）と `garden init` / `upgrade`、再利用可能 GitHub Actions ワークフロー（`.github/workflows/garden-reusable.yml`）、プロジェクトローカル検証スキル（`verify-garden`）および有界全状態形式検証（`formal-verify-garden-engine`）、自動テスト群（`test_garden.py`・`tests/`）。
+> - **未実装（今後の対象）**: MVP-4（1号目の実対象リポジトリへの導入と設計書 §6 の3条件実証）、および実 GitHub Actions 環境での `garden-reusable.yml` 実稼働確認。
 
 ---
 
@@ -343,7 +343,7 @@ owner: "@s-hiraoku"
 AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.toml`）を書き換えて `status: approved` にしたり、必須ゲートや委譲制約を緩めたりする抜け道を塞ぐため、**仕様とガーデン定義の両方について、保護された承認ブランチ（既定 `main`）にマージ済みの Git オブジェクト**を信頼の起点（正本）とします。
 
 **Preflight 照合手順**:
-1. `approval_branch`（CI では `origin/main` 等、解決可能な参照）のコミット SHA（`approval_commit`）を取得する。
+1. 信頼できる承認ブランチ名（既定 `main`、または CLI・ワークフロー引数の `--approval-branch` で明示指定。**PR ブランチ側の `.garden/garden.toml` からは読まない**）を `refs/heads/<branch>` または `refs/remotes/origin/<branch>` として厳格解決し（`HEAD` 等の生 ref は拒否）、コミット SHA（`approval_commit`）を取得する。
 2. **ガーデン定義の照合**:
    - `git show <approval_commit>:.garden/garden.toml` と `git rev-parse <approval_commit>:.garden/garden.toml`（`approved_definition_blob_sha`）を取得し、評価・検証に用いるルール（`[delegation]`、`[flows]`、`[checks]`、`[agents]`、`[spec]`）の基準とする。
    - 作業対象ブランチ（`HEAD`）上の `.garden/garden.toml` の blob SHA（`head_definition_blob_sha`）と比較する。

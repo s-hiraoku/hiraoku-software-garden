@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc_cmd = commands.add_parser("doctor", help="diagnose a target repository Garden setup")
     doc_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    doc_cmd.add_argument("--approval-branch", default="main")
     doc_cmd.add_argument("--json", action="store_true", dest="as_json")
     doc_cmd.add_argument("--skip-network", action="store_true")
 
@@ -55,11 +56,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Deterministic flow execution
     run_cmd = commands.add_parser("run", help="execute a Garden flow deterministically")
-    run_cmd.add_argument("flow", help="flow name defined in .garden/garden.toml")
+    run_cmd.add_argument("flow", help="flow name defined in .garden/garden.toml (or 'auto' via [[triggers]])")
     run_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    run_cmd.add_argument("--approval-branch", default="main")
     run_cmd.add_argument("--trigger-event", default="manual")
     run_cmd.add_argument("--trigger-id", default="manual")
+    run_cmd.add_argument("--trigger-action", default=None)
+    run_cmd.add_argument("--trigger-label", default=None)
     run_cmd.add_argument("--issue", type=int, default=None)
+    run_cmd.add_argument("--check-github-markers", action="store_true")
+    run_cmd.add_argument("--existing-comments-file", type=Path, default=None)
     run_cmd.add_argument("--force", action="store_true")
     run_cmd.add_argument("--keep-worktree", action="store_true")
     run_cmd.add_argument("--no-worktree", action="store_true")
@@ -135,7 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.action == "doctor":
-        code, items = run_doctor(args.target, skip_network=args.skip_network)
+        code, items = run_doctor(
+            args.target,
+            skip_network=args.skip_network,
+            approval_branch=args.approval_branch,
+        )
         if args.as_json:
             print(
                 json.dumps(
@@ -163,17 +173,34 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.action == "run":
+        existing_comments: list[str] | None = None
+        if args.existing_comments_file is not None:
+            try:
+                raw_comments = json.loads(
+                    args.existing_comments_file.read_text(encoding="utf-8")
+                )
+                if not isinstance(raw_comments, list):
+                    raise ValueError("existing-comments-file must contain a JSON array of strings")
+                existing_comments = [str(c) for c in raw_comments]
+            except (OSError, ValueError) as error:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
         try:
             result = run_flow(
                 args.target,
                 args.flow,
+                approval_branch=args.approval_branch,
                 trigger_event=args.trigger_event,
                 trigger_id=args.trigger_id,
+                trigger_action=args.trigger_action,
+                trigger_label=args.trigger_label,
                 issue_or_pr=args.issue,
                 force=args.force,
                 keep_worktree=args.keep_worktree,
                 use_worktree=not args.no_worktree,
                 include_proposed=args.include_proposed,
+                existing_comments=existing_comments,
+                check_github_markers=args.check_github_markers,
             )
         except (DefinitionError, GitError, ValueError, OSError) as error:
             print(f"error: {error}", file=sys.stderr)

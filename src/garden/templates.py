@@ -117,6 +117,7 @@ def detect_templates(
         detect_cfg = meta.get("detect") or {}
         files_any = detect_cfg.get("files_any") or []
         keywords_any = detect_cfg.get("keywords_any") or []
+        exclude_keywords = detect_cfg.get("exclude_keywords") or []
 
         score = 0
         reasons: list[str] = []
@@ -124,7 +125,7 @@ def detect_templates(
         for rel in files_any:
             candidate = target_root / rel
             if candidate.is_file():
-                score += 2
+                score += 1
                 reasons.append(f"file:{rel}")
                 matched_files.append(candidate)
 
@@ -140,8 +141,11 @@ def detect_templates(
                 continue
             for kw in keywords_any:
                 if kw in content:
-                    score += 1
+                    score += 3
                     reasons.append(f"keyword:{kw}@{sf.name}")
+            for ex in exclude_keywords:
+                if ex in content:
+                    score -= 3
 
         if score > 0:
             matches.append(

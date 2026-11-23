@@ -433,3 +433,132 @@ check = "slow"
             self.assertFalse(
                 any("fix_code" in s for s in out["run"]["steps"])
             )
+
+    def test_pr_cannot_spoof_approval_branch_to_head_to_bypass_trust_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _build_fixture_repo(Path(tmp) / "repo", app_value="OK")
+            git(repo, "switch", "-c", "evil")
+            def_file = repo / ".garden" / "garden.toml"
+            tampered = (
+                def_file.read_text(encoding="utf-8")
+                .replace('approval_branch = "main"', 'approval_branch = "HEAD"')
+                .replace(
+                    'require_checks = ["unit", "e2e", "formal_inv"]',
+                    'require_checks = ["unit"]',
+                )
+            )
+            def_file.write_text(tampered, encoding="utf-8")
+            commit_all(repo, "spoof approval_branch to HEAD")
+
+            proc = run_cli("run", "verify_and_fix", "--target", str(repo), "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            out = json.loads(proc.stdout)
+            self.assertTrue(out["run"]["target"]["evaluation_criteria_changed"])
+            self.assertEqual(out["run"]["effective_delegation"]["mode"], "propose_pr")
+            summary = (Path(out["run_dir"]) / "summary.md").read_text(encoding="utf-8")
+            self.assertIn("<!-- garden:v1 kind=verified ", summary)
+            # Approved main gate (unit + e2e + formal_inv) must still have executed
+            self.assertEqual(
+                out["run"]["criteria_results"]["INV-001"]["verdict"], "satisfied"
+            )
+
+    def test_no_worktree_ignores_preexisting_untracked_files_during_fix_loop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _build_fixture_repo(Path(tmp) / "repo", app_value="BROKEN")
+            (repo / ".garden-nursery").mkdir()
+            (repo / ".garden-nursery" / "garden.py").write_text("# external\n", encoding="utf-8")
+
+            proc = run_cli(
+                "run", "verify_and_fix", "--target", str(repo), "--no-worktree", "--json"
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)["verdict"], "SATISFIED")
+
+    def test_ci_duplicate_skip_via_github_html_marker_and_trigger_auto_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            extra_triggers = """
+[[triggers]]
+id = "pr-verify"
+event = "pull_request"
+flow = "full_verify"
+[triggers.conditions]
+actions = ["opened", "synchronize"]
+"""
+            repo = _build_fixture_repo(
+                Path(tmp) / "repo", app_value="OK", extra_flows_toml=extra_triggers
+            )
+            # 1) Auto-resolve flow from [[triggers]]
+            p1 = run_cli(
+                "run",
+                "auto",
+                "--target",
+                str(repo),
+                "--trigger-event",
+                "pull_request",
+                "--trigger-action",
+                "opened",
+                "--json",
+            )
+            self.assertEqual(p1.returncode, 0, p1.stderr)
+            d1 = json.loads(p1.stdout)
+            self.assertEqual(d1["run"]["flow"], "full_verify")
+            idem_key = d1["run"]["idempotency_key"]
+
+            # Remove local .garden/runs so ONLY the GitHub marker can skip
+            import shutil
+
+            shutil.rmtree(repo / ".garden" / "runs")
+
+            # 2) Non-SATISFIED marker must NOT skip
+            comments_file = Path(tmp) / "comments.json"
+            comments_file.write_text(
+                json.dumps(
+                    [
+                        f"<!-- garden:v1 kind=escalation run_id=r0 idempotency_key={idem_key} verdict=UNSATISFIED commit=abc -->\nfailed"
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            p2 = run_cli(
+                "run",
+                "auto",
+                "--target",
+                str(repo),
+                "--trigger-event",
+                "pull_request",
+                "--trigger-action",
+                "opened",
+                "--existing-comments-file",
+                str(comments_file),
+                "--json",
+            )
+            self.assertEqual(p2.returncode, 0, p2.stderr)
+            self.assertFalse(json.loads(p2.stdout)["skipped_duplicate"])
+
+            # Remove local runs again, now supply a SATISFIED marker -> MUST skip
+            shutil.rmtree(repo / ".garden" / "runs")
+            comments_file.write_text(
+                json.dumps(
+                    [
+                        f"<!-- garden:v1 kind=harvest run_id=r-prev idempotency_key={idem_key} verdict=SATISFIED commit=abc -->\nok"
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            p3 = run_cli(
+                "run",
+                "auto",
+                "--target",
+                str(repo),
+                "--trigger-event",
+                "pull_request",
+                "--trigger-action",
+                "opened",
+                "--existing-comments-file",
+                str(comments_file),
+                "--json",
+            )
+            self.assertEqual(p3.returncode, 0, p3.stderr)
+            d3 = json.loads(p3.stdout)
+            self.assertTrue(d3["skipped_duplicate"])
+            self.assertEqual(d3["run_id"], "r-prev")
