@@ -1,7 +1,10 @@
 # hiraoku-software-garden
 
-Lauren Tan (poteto) の「ソフトウェアファクトリー」を、個人規模で模倣するための土台リポジトリ。
-思想は software factory ではなく **software gardening** — コードベースを庭として手入れし、判断を外に出して引き継げる形にする。
+種類の違うソフトウェアを、共通の開発手順で育てるための Home Repo です。pstack を全プロジェクト共通の開発ハーネスとして使い、目的と完了条件を決め、小さく実装し、動作の証拠を残し、失敗から次の変更を改善します。各プロジェクトは、固有の仕様と技術スタックに合うライブラリを選び、設計の制約や動作検証の手順と組み合わせてハーネスを育てます。
+
+Garden から対象のリポジトリを探し、登録されたチェックを同じ入口で実行できます。最初の対象には、新しく割り当てるプロジェクトを登録します。
+
+**Software gardening** は、実際の失敗を手がかりにコードベースと検証の仕組みを育て続ける考え方です。[Home Repo の設計と使い方](docs/implementation/README.md)
 
 出典: Lauren Tan "All Code Is Slop (Except Mine)" (AI Engineer CODE 2026, 2026-11-11)
 https://www.youtube.com/watch?v=O_zcc6Xl12g
@@ -43,4 +46,4 @@ https://www.youtube.com/watch?v=O_zcc6Xl12g
 
 ## ドキュメント
 
-[資料一覧と読む順番](docs/README.md)から、講演資料と実装への適用方針を参照できます。
+[資料一覧と読む順番](docs/README.md)から、講演資料と Home Repo の設計を参照できます。
