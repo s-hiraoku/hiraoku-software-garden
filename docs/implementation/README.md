@@ -91,4 +91,4 @@ python3 garden.py --workspace "$PWD/../projects" --catalog my-garden.toml check 
 
 `useEffect` やコメントの制限、TLA+、Lean は、講演で紹介された実例です。各リポジトリの課題に応じて制約や検証方法を選びます。
 
-[プロジェクト概要](../../README.md) · [ドキュメント一覧](../README.md)
+[プロジェクト概要](../../README.md) · [ソフトウェアガーデン設計書](design.md) · [ソフトウェアガーデン詳細設計書](detailed-design.md) · [ドキュメント一覧](../README.md)

@@ -9,6 +9,7 @@
 3. [ナーサリーの設計と使い方](implementation/README.md) — 共通の開発手順、リポジトリの登録とチェック実行。
 4. [用語集](../GLOSSARY.md) — 人とエージェントで用語の意味をそろえるための定義。
 5. [ソフトウェアガーデン設計書](implementation/design.md) — 仕様を起点とする実行・検証の流れとテンプレートの運用方針。
+6. [ソフトウェアガーデン詳細設計書](implementation/detailed-design.md) — 実装レベルのアーキテクチャ、`.garden/garden.toml` スキーマ、ステートマシン、プロトコル、CLI 仕様、MVP マイルストーン。
 
 ## 資料の置き場
 
