@@ -789,6 +789,7 @@ search_paths = [
 | 実行・記録 | `garden reflect <run-dir> [--base BRANCH] [--execute]` | 工程⑥の反映ゲート判定（既定ドライラン、`--execute` で PR 作成・条件充足時のみ `--auto` マージ） | `0` 反映許可・なし / `1` ブロック・実行失敗 / `2` 入力不正 |
 | 改善・測定 | `garden feedback add\|from-comment\|update\|summary [--target PATH]` | 人の介入レコードの記録（CLI / `/garden feedback` コメント解析）・状態更新・分類別集計 | `0` 成功 / `2` 入力不正 |
 | 改善・測定 | `garden metrics [--target PATH] [--limit N]` | 実行記録と介入レコードから判定率・再試行・再発条件・介入解消率を集計 | `0` 成功 / `2` 入力不正 |
+| 改善・測定 | `garden status [--no-self] [--skip-network] [--json]` | ナーサリー自身および `garden.toml` 登録済みの全ガーデンの健全性・診断・テンプレート版・直近判定を横断表示 | `0` 障害なし / `1` error・unavailable あり / `2` カタログ不正 |
 
 ※ `garden run` の終了コードを `1` (`UNSATISFIED`) / `3` (`INCONCLUSIVE`) / `4` (`NEEDS_HUMAN`) / `5` (`ABORTED`) で分けることで、GitHub Actions 側が「失敗」「判定不能」「人判断待ち」「明示中断」を機械的に分岐・ラベル付けできます。
 

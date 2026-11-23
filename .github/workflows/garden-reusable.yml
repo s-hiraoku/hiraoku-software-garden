@@ -38,13 +38,12 @@ on:
         type: string
         default: "main"
 
-concurrency:
-  group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
-  cancel-in-progress: false
-
 jobs:
   run-garden:
     runs-on: ubuntu-latest
+    concurrency:
+      group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4
@@ -99,7 +98,6 @@ jobs:
           FLOW_NAME: ${{ inputs.flow }}
           APPROVAL_BRANCH: ${{ inputs.approval_branch }}
           FORCE_RUN: ${{ inputs.force }}
-          REFLECT_ENABLED: ${{ inputs.reflect }}
           ISSUE_NUM: ${{ inputs.issue_number }}
           TRIGGER_ACTION: ${{ github.event.action }}
         run: |
@@ -122,25 +120,22 @@ jobs:
           if [ "${FORCE_RUN}" = "true" ]; then
             ARGS+=(--force)
           fi
-          if [ "${REFLECT_ENABLED}" = "true" ]; then
-            ARGS+=(--keep-worktree)
-          fi
           "${ARGS[@]}" > "${LAST_RUN_JSON}"
           EXIT_CODE=$?
           echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
           python3 - "${LAST_RUN_JSON}" "${GITHUB_OUTPUT}" <<'PY'
-import json, pathlib, sys
-src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-try:
-    d = json.loads(src.read_text(encoding="utf-8"))
-    run_dir = d.get("run_dir") or ""
-    skipped = "true" if d.get("skipped_duplicate") else "false"
-except Exception:
-    run_dir, skipped = "", "false"
-with out.open("a", encoding="utf-8") as fh:
-    fh.write(f"run_dir={run_dir}\n")
-    fh.write(f"skipped_duplicate={skipped}\n")
-PY
+          import json, pathlib, sys
+          src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          try:
+              d = json.loads(src.read_text(encoding="utf-8"))
+              run_dir = d.get("run_dir") or ""
+              skipped = "true" if d.get("skipped_duplicate") else "false"
+          except Exception:
+              run_dir, skipped = "", "false"
+          with out.open("a", encoding="utf-8") as fh:
+              fh.write(f"run_dir={run_dir}\n")
+              fh.write(f"skipped_duplicate={skipped}\n")
+          PY
           exit "${EXIT_CODE}"
 
       - name: Upload Run Artifacts

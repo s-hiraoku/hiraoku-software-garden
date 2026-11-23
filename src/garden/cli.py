@@ -19,6 +19,7 @@ from garden.feedback import (
     summarize_interventions,
     update_intervention,
 )
+from garden.fleet import collect_fleet_status
 from garden.git_utils import GitError
 from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
@@ -144,6 +145,15 @@ def build_parser() -> argparse.ArgumentParser:
     gate_cmd.add_argument("--version", type=int, default=None)
     gate_cmd.add_argument("--all", dest="all_templates", action="store_true")
     gate_cmd.add_argument("--output", type=Path, default=None)
+
+    status_cmd = commands.add_parser(
+        "status",
+        help="show aggregated health, doctor, template version, and metrics across all Gardens",
+    )
+    status_cmd.add_argument("--approval-branch", default="main")
+    status_cmd.add_argument("--no-self", action="store_true", help="exclude Nursery self-dogfood garden")
+    status_cmd.add_argument("--skip-network", action="store_true")
+    status_cmd.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -397,6 +407,31 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(evidence, ensure_ascii=False, indent=2))
         return 0 if evidence["overall_passed"] else 1
+
+    if args.action == "status":
+        try:
+            fleet = collect_fleet_status(
+                args.catalog,
+                args.workspace,
+                include_self=not args.no_self,
+                approval_branch=args.approval_branch,
+                skip_network=args.skip_network,
+            )
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        if args.as_json:
+            print(json.dumps(fleet, ensure_ascii=False, indent=2))
+        else:
+            for g in fleet["gardens"]:
+                latest = g.get("latest_run") or {}
+                verdict = latest.get("verdict") or "-"
+                tpl = g.get("template")
+                tpl_str = f"{tpl['name']}@v{tpl['version']}" if tpl else "-"
+                print(
+                    f"[{g['health'].upper():12}] {g['repo']} ({tpl_str}) latest={verdict}"
+                )
+        return 1 if fleet["has_errors"] else 0
 
     parser.error(f"unknown action: {args.action}")
     return 2
