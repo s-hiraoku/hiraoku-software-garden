@@ -5,11 +5,11 @@ description: "Formally verify the safety invariants of hiraoku-software-garden's
 
 # Formally verify Garden engine & delegation invariants
 
-This skill runs a bounded exhaustive verifier directly against the real Python production code in `src/garden/engine.py`, `src/garden/artifacts.py`, `src/garden/definition.py`, `src/garden/guard.py`, and `src/garden/publish.py` (59,442 reachable scenarios and combinations in ~2 seconds, zero external dependencies).
+This skill runs a bounded exhaustive verifier directly against the real Python production code in `src/garden/engine.py`, `src/garden/artifacts.py`, `src/garden/definition.py`, `src/garden/guard.py`, and `src/garden/publish.py` (60,402 reachable scenarios and combinations in ~2 seconds, zero external dependencies).
 
 ## Covered code & sync record
 
-- **Last verified sync commit:** `ce0f91b`
+- **Last verified sync commit:** `4990e2c`
 - **Covered files and functions:**
   - `src/garden/engine.py`: `run_flow`, `_evaluate_criteria`, `_apply_effective_delegation`, `VERDICT_EXIT_CODES`
   - `src/garden/artifacts.py`: `resolve_report_kind`
@@ -20,7 +20,7 @@ This skill runs a bounded exhaustive verifier directly against the real Python p
 Check whether your change touches covered code before deciding to skip:
 
 ```sh
-git diff --name-only ce0f91b -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
+git diff --name-only 4990e2c -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
 ```
 
 If that command outputs any file, you **must** run the verifier below and confirm whether the verifier still matches the code at your new commit.
@@ -34,7 +34,7 @@ If that command outputs any file, you **must** run the verifier below and confir
 5. **`INV-DELEGATION-MONOTONICITY`** — *Property:* Flow-level `[flows.<name>.delegation]` overrides can never relax `mode`, expand `allowed_paths`, raise `max_retries` / `max_cost_usd`, remove `require_checks`, or drop mandatory `forbidden_paths` (`.garden/**` and `[spec].paths`). *Harm if broken:* A flow definition silently escalates its own write or auto-merge authority beyond repo policy.
 6. **`INV-OBSERVE-ONLY-NO-AGENT`** — *Property:* When Trust Anchor downgrades `effective_delegation.mode` to `observe_only` at runtime (e.g., on a spec-modifying PR), `fix_and_retry` never invokes a mutating `agent` step. *Harm if broken:* The engine spends agent tokens/time and attempts edits on a read-only run instead of halting cleanly.
 7. **`INV-GUARD-PATH-SOUNDNESS`** — *Property:* `match_glob` preserves leading dots on hidden directories (`.garden/**`, `.github/workflows/**`) and strips only leading `./`, never confusing `garden/` with `.garden/` or missing nested forbidden paths. *Harm if broken:* Forbidden paths slip past the guard or unrelated directories trigger false blocks.
-8. **`INV-REFLECT-GATE-SOUNDNESS`** — *Property:* `evaluate_reflect_gate` permits `auto_merge` only when `verdict == "SATISFIED"`, `mode == "auto_merge"`, `worktree_branch` is present, `evaluation_criteria_changed == False`, `flow_scope == "all_specs"`, and every criterion is `satisfied`; non-`SATISFIED` or `observe_only` runs are always `blocked`. *Harm if broken:* Unverified or criteria-mutating changes could be queued for auto-merge.
+8. **`INV-REFLECT-GATE-SOUNDNESS`** — *Property:* `evaluate_reflect_gate` permits `auto_merge` only when `verdict == "SATISFIED"`, `mode == "auto_merge"`, `worktree_branch` and `verified_commit` (`!= target_commit`) are present, `evaluation_criteria_changed == False`, `flow_scope == "all_specs"`, and every criterion is `satisfied`; `propose_pr` / `auto_merge` are never allowed without a `verified_commit` diff, and non-`SATISFIED` or `observe_only` runs are always `blocked`. *Harm if broken:* Unverified, empty, or criteria-mutating branches could be queued for PR creation or auto-merge.
 
 ## Tool choice, bounds, and what is NOT covered
 
@@ -44,7 +44,7 @@ If that command outputs any file, you **must** run the verifier below and confir
   - `engine.py` / `artifacts.py`: 12,840 combinations across `specs_approved ∈ {True, False}`, `eval_changed ∈ {True, False}`, `force_observe_only ∈ {True, False}`, `scope ∈ {all_specs, flow_checks}`, `on_fail ∈ {abort, escalate, retry, fix_and_retry}`, `on_inconclusive ∈ {escalate, retry, abort}`, `max_retries ∈ {0, 1, 2}`, cache-primed vs unprimed flows, 6 bounded check-outcome sequences, 3 second-check outcomes, and 5 agent/guard outcomes.
   - `definition.py`: 45,927 combinations across 3 modes, 3 `allowed_paths` sets, 3 `max_retries` values, 3 `max_cost_usd` values, and 3 `require_checks` sets.
   - `guard.py`: 195 `(path, pattern)` combinations across hidden directories (`.garden/**`, `.github/workflows/**`), lookalike directories (`garden/...`), `./` prefixes, and nested files.
-  - `publish.py`: 480 combinations across 5 verdicts, 4 delegation modes, branch presence, `evaluation_criteria_changed`, `flow_scope`, and 3 criteria-completeness shapes.
+  - `publish.py`: 1,440 combinations across 5 verdicts, 3 delegation modes, branch presence, 3 `verified_commit` states (`None`, `target_commit`, changed commit), `evaluation_criteria_changed`, `flow_scope`, and 4 criteria-completeness shapes.
 - **Out of scope (not proved by this check):**
   - Subprocess I/O, Git CLI behavior, symlink/OS filesystem semantics, and real `git diff --no-renames` execution (covered instead by `tests/test_guard.py`, `tests/test_engine.py`, and `.agents/skills/verify-garden/`).
   - Multi-step flows with more than 2 distinct checks, `max_retries > 2`, or concurrent multi-process execution across separate OS processes.
@@ -55,7 +55,7 @@ If that command outputs any file, you **must** run the verifier below and confir
 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
 ```
 
-Expected passing output: exit code `0`, `"total_states_checked": 59442`, all eight invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`. When `GARDEN_EVIDENCE_DIR` is set, it also writes `$GARDEN_EVIDENCE_DIR/formal.json` for native `kind = "formal_check"` integration.
+Expected passing output: exit code `0`, `"total_states_checked": 60402`, all eight invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`. When `GARDEN_EVIDENCE_DIR` is set, it also writes `$GARDEN_EVIDENCE_DIR/formal.json` for native `kind = "formal_check"` integration.
 
 ## Interpreting failures (real bug vs verifier drift)
 
