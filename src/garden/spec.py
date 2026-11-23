@@ -182,9 +182,16 @@ def validate_covers(
 
 
 def verify_trust_anchor(
-    repo_root: Path, definition_rel_path: str = GARDEN_DEF_REL_PATH
+    repo_root: Path,
+    definition_rel_path: str = GARDEN_DEF_REL_PATH,
+    *,
+    approval_branch: str = "main",
 ) -> TrustAnchorResult:
-    """Resolve and validate approved garden definition and specs against approval_branch."""
+    """Resolve and validate approved garden definition and specs against a trusted approval_branch.
+
+    Never reads `approval_branch` from the untrusted HEAD definition so a PR cannot
+    redirect the Trust Anchor to itself (e.g. `approval_branch = "HEAD"`).
+    """
     worktree_def_path = repo_root / definition_rel_path
     if not worktree_def_path.is_file():
         raise DefinitionError(f"{worktree_def_path}: garden definition not found")
@@ -193,7 +200,6 @@ def verify_trust_anchor(
     head_def = load_definition_bytes(worktree_def_bytes, str(worktree_def_path))
     head_def_blob_sha = blob_sha_at(repo_root, "HEAD", definition_rel_path)
 
-    approval_branch = head_def.spec.approval_branch
     try:
         _, approval_commit = resolve_branch_commit(repo_root, approval_branch)
     except GitError as error:

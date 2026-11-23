@@ -4,11 +4,16 @@ on:
   workflow_call:
     inputs:
       flow:
-        description: "Garden flow name defined in .garden/garden.toml"
+        description: "Garden flow name defined in .garden/garden.toml (or 'auto' to resolve via [[triggers]])"
         required: true
         type: string
+      approval_branch:
+        description: "Trusted approval branch name for Trust Anchor verification"
+        required: false
+        type: string
+        default: "main"
       issue_number:
-        description: "Issue or PR number for reporting and label transitions (0 to skip)"
+        description: "Issue or PR number for reporting, duplicate-marker check, and label transitions (0 to skip)"
         required: false
         type: number
         default: 0
@@ -24,7 +29,7 @@ on:
         default: "main"
 
 concurrency:
-  group: garden-${{ inputs.flow }}-${{ github.ref }}
+  group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
@@ -36,15 +41,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch approval branch (main)
-        run: git fetch origin main:refs/remotes/origin/main || true
+      - name: Authorize and checkout PR head on issue_comment resume
+        if: github.event_name == 'issue_comment'
+        env:
+          ISSUE_NUM: ${{ inputs.issue_number }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          AUTHOR_ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          if [ "${IS_PR}" != "true" ] || [ "${ISSUE_NUM}" = "0" ] || [ -z "${ISSUE_NUM}" ]; then
+            echo "error: /garden resume is only supported on pull requests" >&2
+            exit 1
+          fi
+          case "${AUTHOR_ASSOC}" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "error: unauthorized commenter association '${AUTHOR_ASSOC}' for /garden resume" >&2
+              exit 1
+              ;;
+          esac
+          git fetch origin "pull/${ISSUE_NUM}/head:garden-pr-head"
+          git checkout garden-pr-head
 
-      - name: Checkout Nursery CLI
-        uses: actions/checkout@v4
-        with:
-          repository: s-hiraoku/hiraoku-software-garden
-          ref: ${{ inputs.nursery_ref }}
-          path: .garden-nursery
+      - name: Fetch trusted approval branch
+        env:
+          APPROVAL_BRANCH: ${{ inputs.approval_branch }}
+        run: git fetch origin "${APPROVAL_BRANCH}:refs/remotes/origin/${APPROVAL_BRANCH}" || true
+
+      - name: Clone Nursery CLI outside target checkout
+        env:
+          NURSERY_REF: ${{ inputs.nursery_ref }}
+        run: |
+          rm -rf "${RUNNER_TEMP}/garden-nursery"
+          git clone --depth 1 --branch "${NURSERY_REF}" \
+            https://github.com/s-hiraoku/hiraoku-software-garden.git \
+            "${RUNNER_TEMP}/garden-nursery"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -55,52 +85,63 @@ jobs:
         id: garden_run
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ github.token }}
           FLOW_NAME: ${{ inputs.flow }}
+          APPROVAL_BRANCH: ${{ inputs.approval_branch }}
           FORCE_RUN: ${{ inputs.force }}
           ISSUE_NUM: ${{ inputs.issue_number }}
+          TRIGGER_ACTION: ${{ github.event.action }}
         run: |
           set +e
-          mkdir -p .garden
+          LAST_RUN_JSON="${RUNNER_TEMP}/garden-last-run.json"
           ARGS=(
-            python3 .garden-nursery/garden.py run "${FLOW_NAME}"
+            python3 "${RUNNER_TEMP}/garden-nursery/garden.py" run "${FLOW_NAME}"
             --target .
+            --approval-branch "${APPROVAL_BRANCH}"
             --trigger-event "${GITHUB_EVENT_NAME}"
             --trigger-id "${GITHUB_WORKFLOW}"
-            --no-worktree
             --json
           )
+          if [ -n "${TRIGGER_ACTION}" ]; then
+            ARGS+=(--trigger-action "${TRIGGER_ACTION}")
+          fi
           if [ "${ISSUE_NUM}" != "0" ] && [ -n "${ISSUE_NUM}" ]; then
-            ARGS+=(--issue "${ISSUE_NUM}")
+            ARGS+=(--issue "${ISSUE_NUM}" --check-github-markers)
           fi
           if [ "${FORCE_RUN}" = "true" ]; then
             ARGS+=(--force)
           fi
-          "${ARGS[@]}" > .garden/last-run.json
+          "${ARGS[@]}" > "${LAST_RUN_JSON}"
           EXIT_CODE=$?
           echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
-          RUN_DIR=$(python3 -c "import json, pathlib
-p = pathlib.Path('.garden/last-run.json')
+          python3 - "${LAST_RUN_JSON}" "${GITHUB_OUTPUT}" <<'PY'
+import json, pathlib, sys
+src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 try:
-    d = json.loads(p.read_text(encoding='utf-8'))
-    print(d.get('run_dir') or '')
+    d = json.loads(src.read_text(encoding="utf-8"))
+    run_dir = d.get("run_dir") or ""
+    skipped = "true" if d.get("skipped_duplicate") else "false"
 except Exception:
-    print('')")
-          echo "run_dir=${RUN_DIR}" >> "${GITHUB_OUTPUT}"
+    run_dir, skipped = "", "false"
+with out.open("a", encoding="utf-8") as fh:
+    fh.write(f"run_dir={run_dir}\n")
+    fh.write(f"skipped_duplicate={skipped}\n")
+PY
           exit "${EXIT_CODE}"
 
       - name: Upload Run Artifacts
-        if: always() && steps.garden_run.outputs.run_dir != ''
+        if: always() && steps.garden_run.outputs.run_dir != '' && steps.garden_run.outputs.skipped_duplicate != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: garden-run-${{ inputs.flow }}-${{ github.run_id }}
           path: ${{ steps.garden_run.outputs.run_dir }}
 
       - name: Post report to GitHub Issue / PR
-        if: always() && inputs.issue_number != 0 && steps.garden_run.outputs.run_dir != ''
+        if: always() && inputs.issue_number != 0 && steps.garden_run.outputs.run_dir != '' && steps.garden_run.outputs.skipped_duplicate != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 .garden-nursery/garden.py report \
+          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
             "${{ steps.garden_run.outputs.run_dir }}" \
             --post-github-issue "${{ inputs.issue_number }}"
 

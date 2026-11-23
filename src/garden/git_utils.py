@@ -66,14 +66,22 @@ def list_remotes(path: Path) -> dict[str, str]:
 
 
 def resolve_branch_commit(path: Path, branch: str) -> tuple[str, str]:
-    """Resolve an approval branch to (ref_used, commit_sha).
+    """Resolve an approval branch name strictly to refs/heads/<branch> or refs/remotes/origin/<branch>.
 
-    Checks local branch first, then origin/<branch>, then raw ref.
+    Rejects raw symbolic refs (such as HEAD) or path traversal so an untrusted
+    branch cannot spoof the Trust Anchor.
     """
+    if (
+        not branch
+        or branch == "HEAD"
+        or branch.startswith("refs/")
+        or ".." in branch
+        or any(ch.isspace() for ch in branch)
+    ):
+        raise GitError(f"invalid approval branch name '{branch}'")
     candidates = [
         f"refs/heads/{branch}",
         f"refs/remotes/origin/{branch}",
-        branch,
     ]
     for candidate in candidates:
         sha = try_git_output(path, "rev-parse", "--verify", f"{candidate}^{{commit}}")

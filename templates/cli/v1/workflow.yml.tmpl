@@ -22,8 +22,10 @@ jobs:
   garden:
     if: >-
       github.event_name != 'issue_comment' ||
-      startsWith(github.event.comment.body, '/garden resume')
+      (github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '/garden resume') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     uses: s-hiraoku/hiraoku-software-garden/.github/workflows/garden-reusable.yml@main
     with:
-      flow: ${{ inputs.flow || 'verify_only' }}
+      flow: ${{ inputs.flow || (github.event_name == 'pull_request' && 'auto' || 'verify_only') }}
       issue_number: ${{ github.event.pull_request.number || github.event.issue.number || 0 }}

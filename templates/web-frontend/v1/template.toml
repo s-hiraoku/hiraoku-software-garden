@@ -1,0 +1,29 @@
+schema_version = 1
+name = "web-frontend"
+version = 1
+summary = "Web フロントエンド向けガーデンテンプレート（ブラウザ操作・表示・永続化状態を検証）"
+
+[detect]
+files_any = ["package.json", "vite.config.ts", "vite.config.js", "next.config.mjs", "next.config.ts", "playwright.config.ts"]
+keywords_any = ["\"react\"", "\"next\"", "\"vite\"", "\"vue\"", "\"svelte\"", "\"@playwright/test\""]
+
+[common_harness]
+name = "pstack"
+ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
+
+[defaults.delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 1
+max_duration_sec = 900
+max_cost_usd = 4.0
+
+[defaults.checks.ui_smoke]
+kind = "check"
+command = ["python3", "-c", "print('replace with Playwright/UI smoke check')"]
+timeout_sec = 300
+covers = ["AC-001"]
+inconclusive_exit_codes = [75]
+status = "active"

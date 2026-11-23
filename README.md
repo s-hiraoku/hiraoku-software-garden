@@ -31,9 +31,11 @@ cd hiraoku-software-garden
 python3 garden.py --help
 ```
 
-`garden` コマンドとして使う場合は、編集可能モードでインストールします。以降の例は `garden` と書きますが、`python3 garden.py` に読み替えても同じように動きます。
+`garden` コマンドとして使う場合は、仮想環境（`venv` など）内で編集可能モードでインストールします。以降の例は `garden` と書きますが、`python3 garden.py` に読み替えても同じように動きます。
 
 ```sh
+python3 -m venv .venv
+. .venv/bin/activate
 python3 -m pip install -e .
 garden --help
 ```
@@ -42,7 +44,7 @@ garden --help
 
 ### 1. ガーデンの雛形を生成する
 
-対象リポジトリのルートで `garden init` を実行します。ファイル構成から型を自動で判定し、テンプレートからガーデン定義と仕様の雛形を生成します。現在使えるテンプレートは `cli` だけです。判定できない場合は `--type cli` で指定します。
+対象リポジトリのルートで `garden init` を実行します。ファイル構成から型を自動で判定し、テンプレートからガーデン定義と仕様の雛形を生成します。現在使えるテンプレートは `cli`、`web-frontend`、`http-api`、`library` の 4 種類です。判定できない場合や明示したい場合は `--type <型名>` で指定します。
 
 ```sh
 garden init --target path/to/your-repo
@@ -60,11 +62,11 @@ garden init --target path/to/your-repo
 ### 2. 仕様とチェックを整える
 
 1. `docs/specs/<リポジトリ名>.md` に目的、受け入れ条件（`AC-xxx`）、不変条件（`INV-xxx`）を書きます。
-2. `.garden/garden.toml` の `[checks.smoke]` にある仮のコマンドを、対象リポジトリの実際のテストやチェックに置き換えます。`command` は引数の配列で書きます。`covers` には、そのチェックが確かめる条件 ID を並べます。
-3. 仕様のすべての条件を、いずれかのチェックの `covers` で覆います。チェックのない条件は「確認できなかった」と扱われ、判定が `INCONCLUSIVE` になります。
+2. `.garden/garden.toml` の初期チェック（例: `[checks.smoke]`）にある仮のコマンドを、対象リポジトリの実際のテストやチェックに置き換えます。`command` は引数の配列で書きます。`covers` には、そのチェックが確かめる条件 ID を並べます。
+3. 仕様のすべての条件を、いずれかのチェックの `covers` で覆います。チェックのない条件は「確認できなかった」と扱われ、判定が `INCONCLUSIVE` になります（雛形の初期状態では `INV-001` に対応するチェックが未設定のため、必要に応じて追加するか `covers` を合わせます）。
 4. 仕様のフロントマターを `status: approved` にして、承認ブランチ（既定は `main`）にマージします。
 
-ガーデンは、承認ブランチにマージされた仕様とガーデン定義だけを評価の基準にします。作業中のブランチで仕様や定義を書き換えても判定の基準は変わらず、書き換えたことが実行記録に残ります。スキーマの全体は[詳細設計書の「ガーデン定義スキーマ」](docs/implementation/detailed-design.md#2-ガーデン定義スキーマgardengardentoml)を参照してください。
+ガーデンは、CLI / ワークフローで指定された信頼できる承認ブランチ（既定 `main`、変更時は `--approval-branch`）にマージされた仕様とガーデン定義だけを評価の基準にします。作業中のブランチで仕様や定義を書き換えても判定の基準は変わらず、書き換えたことが実行記録に残ります。スキーマの全体は[詳細設計書の「ガーデン定義スキーマ」](docs/implementation/detailed-design.md#2-ガーデン定義スキーマgardengardentoml)を参照してください。
 
 ### 3. 診断する
 
@@ -81,7 +83,8 @@ garden run verify_only --target path/to/your-repo
 garden report path/to/your-repo/.garden/runs/<run_id>
 ```
 
-`garden run` はガーデン定義のフローを実行し、判定と実行記録の場所を JSON で出力します。実行記録は `.garden/runs/<run_id>/` に残り、`garden report` で人が読める要約（Markdown または `--format json`）にできます。同じコミットと同じ承認済み仕様ですでに `SATISFIED` になっている場合は再実行を省きます。やり直すときは `--force` を付けます。
+`garden run` はガーデン定義のフローを実行し、判定と実行記録の場所を JSON で出力します。フロー名に `auto` を渡すと、`--trigger-event` と `--trigger-action` に一致する `[[triggers]]` からフローを自動解決します。実行記録は `.garden/runs/<run_id>/` に残り、`garden report` で人が読める要約（Markdown または `--format json`）にできます。同じコミット・同じ承認済み仕様・同じ定義ですでに `SATISFIED` になっている場合は再実行を省きます（CI では `--check-github-markers` により Issue / PR の HTML マーカーも照合します）。やり直すときは `--force` を付けます。
+また、`fix_and_retry` を含むフローでは `[agents.<名前>]` に `codex` / `claude` / `antigravity` / `custom` / `mock` の各アダプターを指定でき、エージェントの応答を `response.json` へ正規化したうえで事後ガードで変更範囲を検証します。
 
 | 判定 | 終了コード | 意味 |
 | --- | --- | --- |
@@ -95,12 +98,12 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 
 ### 5. GitHub Actions で動かす
 
-生成された `.github/workflows/garden.yml` をコミットすると、ナーサリーの再利用ワークフロー（[garden-reusable.yml](.github/workflows/garden-reusable.yml)）が呼ばれます。このワークフローはナーサリーの CLI を取得して `garden run` を実行し、実行記録をアーティファクトとして保存して、結果を PR にコメントします。
+生成された `.github/workflows/garden.yml` をコミットすると、ナーサリーの再利用ワークフロー（[garden-reusable.yml](.github/workflows/garden-reusable.yml)）が呼ばれます。このワークフローは対象チェックアウト外の `$RUNNER_TEMP` にナーサリーの CLI を取得して `garden run` を実行し、実行記録をアーティファクトとして保存して、結果を PR にコメントします。
 
 | 起動のきっかけ | 実行するフロー |
 | --- | --- |
-| PR の作成・更新 | `verify_only` |
-| Issue / PR に `/garden resume` とコメント | `verify_only` |
+| PR の作成・更新 | `auto`（`.garden/garden.toml` の `[[triggers]]` から解決。初期雛形は `verify_only`） |
+| Issue / PR に `/garden resume` とコメント | `verify_only`（PR の場合は `refs/pull/<番号>/head` をチェックアウトして実行） |
 | 手動実行（workflow_dispatch） | 入力で指定したフロー |
 
 判定が `SATISFIED` 以外のときはジョブが失敗します。承認ブランチを保護し、このジョブを必須のチェックにすると、確かめられていない変更をマージできなくなります。
@@ -149,8 +152,7 @@ PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) が同
 - 対象リポジトリのワークフローは、ナーサリーの `main` を直接参照します。版を固定する配布方法（タグやリリース）はまだ決めていません。
 - pstack の導入手順はまだ用意していません。`garden doctor` は [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスに pstack があるかを確認するだけです。
 - ナーサリーを非公開にする場合、対象リポジトリの GitHub Actions からナーサリーを読み取る権限の設定が必要です。
-- テンプレートは `cli` の1種類だけです。Web フロントエンド、HTTP API、ライブラリ向けは今後追加します。
-- 実際の対象リポジトリへの導入（MVP-4）はまだ行っていません。
+- 実際の対象リポジトリへの導入（MVP-4）と、実 GitHub Actions 環境での `garden-reusable.yml` の実稼働確認はまだ行っていません。
 
 ## 文書案内
 

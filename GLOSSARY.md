@@ -13,7 +13,7 @@
 | 対象リポジトリ | ナーサリーに登録して育てる個々のプロダクトのリポジトリ。プロダクトコード、固有の仕様、対象固有のハーネスの実装と依存関係を持つ。 | 「プロジェクト」とは呼ばない。ガーデンは対象リポジトリに生まれる育成環境、対象リポジトリはその置き場。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | ソフトウェアガーデン | このプロジェクト全体の名前。ナーサリーと、そこから生まれた全ガーデンを合わせた取り組みを指す。 | 「このプロジェクト」と言うときはこの意味。個々の対象リポジトリを「プロジェクト」と呼ばない。 | [docs/philosophy.md](docs/philosophy.md) |
 | ソフトウェアファクトリー | 人が仕様を定め、ガーデンが実装と検証を繰り返し、人が完成を判断する、という開発の仕組み全体。ソフトウェアガーデンが目指す姿。 | 外部事例（Pocock、StrongDM など）の意味とは少しずつ異なる。外部の意味を指すときは「〇〇の言うソフトウェアファクトリー」と明示する。 | [README.md](README.md), [docs/philosophy.md](docs/philosophy.md) |
-| テンプレート（育て方） | 種類に合う手順、道具、設計上の制約の組み合わせとしてナーサリーに蓄える、繰り返し使える育て方の知識。共通の開発ハーネスも含む。 | 単なるファイル雛形ではなく検証観点・委譲既定値・推奨スキルを含む。現時点では `templates/cli/v1/` を実装済み、他の型は未実装。 | [docs/philosophy.md](docs/philosophy.md), [詳細設計書](docs/implementation/detailed-design.md) |
+| テンプレート（育て方） | 種類に合う手順、道具、設計上の制約の組み合わせとしてナーサリーに蓄える、繰り返し使える育て方の知識。共通の開発ハーネスも含む。 | 単なるファイル雛形ではなく検証観点・委譲既定値・推奨スキルを含む。`templates/{cli,web-frontend,http-api,library}/v1/` の4型を実装済み。 | [docs/philosophy.md](docs/philosophy.md), [詳細設計書](docs/implementation/detailed-design.md) |
 | ハーネス | エージェントが設計上の制約を守り、実装した挙動を自分で確かめられるようにする仕組み。 | 「共通の開発ハーネス」と「対象固有のハーネス」のどちらかを必ず明示する。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | 共通の開発ハーネス | 全対象リポジトリで使う開発の進め方。現在は pstack を採用。 | ナーサリー側の責務。「共通ハーネス」とは略さない。 | [docs/implementation/README.md](docs/implementation/README.md) |
 | 対象固有のハーネス | その製品をどう起動し、何を操作し、何をもって成功とするかを持つ仕組み。ライブラリ、ドライバー、テストデータ、再発防止チェックを含む。 | 対象リポジトリ側に置く。ナーサリーには置かない。 | [docs/implementation/README.md](docs/implementation/README.md) |
