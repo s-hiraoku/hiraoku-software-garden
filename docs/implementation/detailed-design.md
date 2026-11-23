@@ -793,6 +793,11 @@ search_paths = [
 
 ※ `garden run` の終了コードを `1` (`UNSATISFIED`) / `3` (`INCONCLUSIVE`) / `4` (`NEEDS_HUMAN`) / `5` (`ABORTED`) で分けることで、GitHub Actions 側が「失敗」「判定不能」「人判断待ち」「明示中断」を機械的に分岐・ラベル付けできます。
 
+> **工程⑥ `garden reflect --execute`（および `garden-reusable.yml` の `reflect: true`）の前提と安全条件**:
+> - `target_commit` が `--base` ブランチの祖先であり、かつ `target_commit..verified_commit` の差分がガード通過済みの `agent_changed_files` のみである場合だけ反映を許可します（未レビューの PR コミットが `main` へ自動マージされることを防ぎます）。
+> - テンプレートの既定ワークフローは `observe_only` 向けの `permissions: contents: read` です。`reflect: true` を有効化する呼び出し側ワークフローでは `permissions: contents: write` / `pull-requests: write` と、リポジトリ設定「Allow GitHub Actions to create and approve pull requests」が必要です。
+> - 既定の `GITHUB_TOKEN` で作成した PR は他のワークフローを起動しないため、必須チェック付きブランチで `--auto` マージを完了させるには、GitHub App トークン等を `secrets.reflect_token` で渡してください。
+
 ---
 
 ## 9. 実装マイルストーンと検証基準

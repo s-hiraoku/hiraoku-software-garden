@@ -77,6 +77,8 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("workflow_call:", text)
         self.assertIn("reflect:", text)
         self.assertIn("base_branch:", text)
+        self.assertIn("reflect_token:", text)
+        self.assertIn("if: success() && inputs.reflect", text)
         # Concurrency must be scoped under jobs.run-garden (not top-level)
         self.assertNotIn("\nconcurrency:\n", text)
         self.assertIn("\n    concurrency:\n", text)

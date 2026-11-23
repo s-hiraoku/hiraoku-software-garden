@@ -635,8 +635,8 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
         {"AC-001": {"verdict": "inconclusive"}},
         {},
     )
-    for verdict, mode, eval_changed, scope, branch, v_commit, crit in itertools.product(
-        verdicts, modes, (False, True), scopes, branches, verified_commits, criteria_variants
+    for verdict, mode, eval_changed, scope, branch, v_commit, on_base, crit in itertools.product(
+        verdicts, modes, (False, True), scopes, branches, verified_commits, (True, False), criteria_variants
     ):
         reflect_states += 1
         run_data = {
@@ -649,7 +649,7 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
             "verified_commit": v_commit,
             "criteria_results": crit,
         }
-        decision = evaluate_reflect_gate(run_data)
+        decision = evaluate_reflect_gate(run_data, target_on_base=on_base)
         all_crit_ok = bool(crit) and all(v.get("verdict") == "satisfied" for v in crit.values())
         has_verified_diff = branch is not None and v_commit is not None and v_commit != target_sha
 
@@ -659,6 +659,7 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
                 verdict == "SATISFIED"
                 and mode == "auto_merge"
                 and has_verified_diff
+                and on_base
                 and not eval_changed
                 and scope == "all_specs"
                 and all_crit_ok
@@ -667,7 +668,7 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
                     reflect_violations.append(
                         {
                             "description": "evaluate_reflect_gate allowed auto_merge without all safety preconditions",
-                            "meta": run_data | {"decision": decision.to_dict()},
+                            "meta": run_data | {"target_on_base": on_base, "decision": decision.to_dict()},
                         }
                     )
 
@@ -677,17 +678,17 @@ def check_guard_and_reflect_invariants() -> dict[str, Any]:
                 reflect_violations.append(
                     {
                         "description": f"expected blocked for verdict={verdict}, mode={mode}, got {decision.allowed_action}",
-                        "meta": run_data | {"decision": decision.to_dict()},
+                        "meta": run_data | {"target_on_base": on_base, "decision": decision.to_dict()},
                     }
                 )
 
-        # Safety property 3: propose_pr / auto_merge never allowed without verified_commit diff
-        if decision.allowed_action in ("propose_pr", "auto_merge") and not has_verified_diff:
+        # Safety property 3: propose_pr / auto_merge never allowed without verified_commit diff on base
+        if decision.allowed_action in ("propose_pr", "auto_merge") and (not has_verified_diff or not on_base):
             if len(reflect_violations) < 3:
                 reflect_violations.append(
                     {
-                        "description": f"allowed {decision.allowed_action} without verified_commit diff",
-                        "meta": run_data | {"decision": decision.to_dict()},
+                        "description": f"allowed {decision.allowed_action} without verified_commit diff on base_branch",
+                        "meta": run_data | {"target_on_base": on_base, "decision": decision.to_dict()},
                     }
                 )
 
