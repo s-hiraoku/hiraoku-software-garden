@@ -41,14 +41,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout PR head on issue_comment resume
-        if: github.event_name == 'issue_comment' && inputs.issue_number != 0
+      - name: Authorize and checkout PR head on issue_comment resume
+        if: github.event_name == 'issue_comment'
         env:
           ISSUE_NUM: ${{ inputs.issue_number }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+          AUTHOR_ASSOC: ${{ github.event.comment.author_association }}
         run: |
-          if git fetch origin "pull/${ISSUE_NUM}/head:garden-pr-head" 2>/dev/null; then
-            git checkout garden-pr-head
+          if [ "${IS_PR}" != "true" ] || [ "${ISSUE_NUM}" = "0" ] || [ -z "${ISSUE_NUM}" ]; then
+            echo "error: /garden resume is only supported on pull requests" >&2
+            exit 1
           fi
+          case "${AUTHOR_ASSOC}" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "error: unauthorized commenter association '${AUTHOR_ASSOC}' for /garden resume" >&2
+              exit 1
+              ;;
+          esac
+          git fetch origin "pull/${ISSUE_NUM}/head:garden-pr-head"
+          git checkout garden-pr-head
 
       - name: Fetch trusted approval branch
         env:

@@ -274,10 +274,21 @@ def run_doctor(
             )
         )
 
-    # 7. Approval branch protection check
+    # 7. Approval branch protection check (always uses trusted --approval-branch)
+    if definition.spec.approval_branch != approval_branch:
+        items.append(
+            DiagnosticItem(
+                id="approval_branch_alignment",
+                status="warn",
+                detail=(
+                    f"[spec].approval_branch='{definition.spec.approval_branch}' differs "
+                    f"from trusted --approval-branch='{approval_branch}'"
+                ),
+            )
+        )
     items.append(
         _check_branch_protection(
-            remotes, definition.spec.approval_branch, skip_network=skip_network
+            remotes, approval_branch, skip_network=skip_network
         )
     )
 

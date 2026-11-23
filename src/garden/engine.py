@@ -35,7 +35,7 @@ from garden.git_utils import (
     list_remotes,
     repo_root,
 )
-from garden.guard import list_untracked_files, verify_post_agent_guard
+from garden.guard import snapshot_untracked_files, verify_post_agent_guard
 from garden.report import fetch_github_issue_comments, find_satisfied_marker
 from garden.spec import TrustAnchorResult, verify_trust_anchor
 
@@ -496,7 +496,7 @@ def run_flow(
     worktree_path = root
     worktree_branch: str | None = None
     created_worktree = False
-    baseline_untracked: set[str] = set()
+    baseline_untracked: dict[str, str] = {}
     guard_ignore_prefixes: tuple[str, ...] = ()
     if use_worktree:
         try:
@@ -519,7 +519,7 @@ def run_flow(
                 requested_report_kind="escalation",
             )
     else:
-        baseline_untracked = list_untracked_files(worktree_path)
+        baseline_untracked = snapshot_untracked_files(worktree_path)
         guard_ignore_prefixes = (f".garden/runs/{run_id}/",)
 
     step_records: list[str] = []

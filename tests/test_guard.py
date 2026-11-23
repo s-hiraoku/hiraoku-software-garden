@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from garden.definition import DelegationConfig
-from garden.guard import list_untracked_files, match_glob, verify_post_agent_guard
+from garden.guard import match_glob, snapshot_untracked_files, verify_post_agent_guard
 from tests.helpers import commit_all, git, init_target_repo
 
 
@@ -93,8 +93,9 @@ class PostAgentGuardTests(unittest.TestCase):
             repo, base_commit = self._make_repo(tmp)
             # Pre-existing untracked scratch file (e.g., CI workspace tooling)
             (repo / ".garden-nursery").mkdir()
-            (repo / ".garden-nursery" / "garden.py").write_text("# cli\n", encoding="utf-8")
-            baseline = list_untracked_files(repo)
+            nursery_file = repo / ".garden-nursery" / "garden.py"
+            nursery_file.write_text("# cli\n", encoding="utf-8")
+            baseline = snapshot_untracked_files(repo)
 
             # Run artifacts written during this run under ignore_prefixes
             (repo / ".garden" / "runs" / "r1").mkdir(parents=True)
@@ -109,3 +110,15 @@ class PostAgentGuardTests(unittest.TestCase):
             )
             self.assertTrue(guard.ok, guard.violations)
             self.assertEqual(guard.changed_files, ())
+
+            # Modifying content of a pre-existing untracked file MUST be caught!
+            nursery_file.write_text("# tampered by agent\n", encoding="utf-8")
+            guard2 = verify_post_agent_guard(
+                repo,
+                base_commit,
+                self._delegation(),
+                baseline_untracked=baseline,
+                ignore_prefixes=(".garden/runs/r1/",),
+            )
+            self.assertFalse(guard2.ok)
+            self.assertIn(".garden-nursery/garden.py", guard2.changed_files)
