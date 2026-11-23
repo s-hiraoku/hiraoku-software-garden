@@ -16,28 +16,30 @@
 
 ## 必要なもの
 
-- Python 3.11 以上（標準ライブラリのみで動き、追加の依存パッケージはありません）
+- [uv](https://docs.astral.sh/uv/)（推奨）または [pipx](https://pipx.pypa.io/)。どちらも、ナーサリーの CLI をインストールせずにその場で実行するために使います。
+- Python 3.11 以上（CLI は標準ライブラリだけで動きます）
 - Git
 - GitHub CLI `gh`（任意。`garden doctor` のブランチ保護の確認と、`garden report` の Issue / PR への投稿に使います）
 - 共通の開発ハーネス pstack（任意。`garden doctor` が導入済みかを確認します）
 
-## ナーサリーを準備する
+## CLI を実行する
 
-ナーサリーをクローンします。対象リポジトリと同じ親ディレクトリに置くと、カタログのパスを短く書けます。
+ナーサリーをクローンしたりインストールしたりする必要はありません。対象リポジトリのルートで、次の1行を実行します。
 
 ```sh
-git clone https://github.com/s-hiraoku/hiraoku-software-garden.git
-cd hiraoku-software-garden
-python3 garden.py --help
+uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden init --target .
 ```
 
-`garden` コマンドとして使う場合は、仮想環境（`venv` など）内で編集可能モードでインストールします。以降の例は `garden` と書きますが、`python3 garden.py` に読み替えても同じように動きます。
+uv がない環境では pipx を使います。
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e .
-garden --help
+pipx run --spec git+https://github.com/s-hiraoku/hiraoku-software-garden garden init --target .
+```
+
+どちらも GitHub からナーサリーを取得し、一時的な環境で `garden` コマンドを実行します。テンプレートもパッケージに含まれているので、`init` から `doctor`、`run` まで同じ方法で使えます。以降の例では、`uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden` を `garden` と省略して書きます。
+
+```sh
+alias garden='uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden'
 ```
 
 ## 対象リポジトリにガーデンを導入する
@@ -110,7 +112,7 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 
 ### 6. ナーサリーのカタログに登録する（任意）
 
-ナーサリーの [garden.toml](garden.toml)（カタログ）に対象リポジトリを登録すると、ナーサリーから複数の対象リポジトリのチェックをまとめて実行できます。
+ナーサリーの [garden.toml](garden.toml)（カタログ）に対象リポジトリを登録すると、ナーサリーから複数の対象リポジトリのチェックをまとめて実行できます。カタログはナーサリーのチェックアウトにあるファイルなので、この操作はナーサリーをクローンして行います（[ナーサリー自体を開発する](#ナーサリー自体を開発する)を参照）。
 
 ```toml
 [repositories.my-cli]
@@ -121,8 +123,8 @@ check = ["python3", "-m", "unittest"]
 ```
 
 ```sh
-garden list
-garden check my-cli
+python3 garden.py list
+python3 garden.py check my-cli
 ```
 
 詳しくは[ナーサリーの設計と使い方](docs/implementation/README.md#リポジトリを追加する)を参照してください。
@@ -139,6 +141,18 @@ garden check my-cli
 
 ## ナーサリー自体を開発する
 
+ナーサリーを変更するときや、カタログを使うときはクローンします。`python3 garden.py` で直接実行するか、仮想環境（`venv` など）内で編集可能モードでインストールして `garden` コマンドとして使います。
+
+```sh
+git clone https://github.com/s-hiraoku/hiraoku-software-garden.git
+cd hiraoku-software-garden
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -e .
+```
+
+テストは次のとおりです。
+
 ```sh
 python3 -m unittest test_garden.py -v
 python3 -m unittest discover -s tests -v
@@ -149,7 +163,8 @@ PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) が同
 
 ## 現在の制約と今後決めること
 
-- 対象リポジトリのワークフローは、ナーサリーの `main` を直接参照します。版を固定する配布方法（タグやリリース）はまだ決めていません。
+- 版を固定する方法はまだありません。上の1行も、対象リポジトリのワークフローも、ナーサリーの `main` を直接参照しています。タグを打って `git+https://...@v0.1.0` や `garden-reusable.yml@v0.1.0` のように版を指定できるようにする予定です。
+- `garden init` を Claude Code のプラグインやスラッシュコマンドから呼べるようにすることを検討しています。
 - pstack の導入手順はまだ用意していません。`garden doctor` は [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスに pstack があるかを確認するだけです。
 - ナーサリーを非公開にする場合、対象リポジトリの GitHub Actions からナーサリーを読み取る権限の設定が必要です。
 - 実際の対象リポジトリへの導入（MVP-4）と、実 GitHub Actions 環境での `garden-reusable.yml` の実稼働確認はまだ行っていません。

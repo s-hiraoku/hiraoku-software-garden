@@ -14,7 +14,19 @@ dependencies = []
 garden = "garden.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+# templates/ と harnesses/ をパッケージに同梱し、uvx / pipx run でクローンせずに使えるようにする
+packages = [
+  "garden",
+  "garden.adapters",
+  "garden._nursery.templates",
+  "garden._nursery.harnesses",
+]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.package-dir]
+"" = "src"
+"garden._nursery.templates" = "templates"
+"garden._nursery.harnesses" = "harnesses"
+
+[tool.setuptools.package-data]
+"garden._nursery.templates" = ["**/*"]
+"garden._nursery.harnesses" = ["*.toml"]
