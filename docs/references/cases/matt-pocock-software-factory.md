@@ -30,6 +30,12 @@ Sandcastle は、`sandcastle.run()` で分離されたサンドボックス上�
 
 Pocock が同月に示した v1 の構想では、コードレビューや仕様の実装といった各スキルを関数として呼び出せるようにし、既存のサンドボックスや Inngest、Trigger.dev などの実行基盤に組み込みます。 [Sandcastle v1 の構想](https://x.com/mattpocockuk/status/2116805878187794740)
 
+## 一回の実行と人への引き渡し
+
+Pocock の設計スキルでは、人の承認が必要になった時点でその実行を終えます。承認後にチケットや PR が更新されると、新しい実行が始まります。実行環境を使い捨てにできるよう、次の実行に渡す情報はチケット、Git ホスト、オーケストレーターに残します。仕事ごとに、何をきっかけに実行し、何に書き込み、次に何を始め、二重実行をどう防ぐかを決めます。[Pocock の設計スキル](https://github.com/mattpocock/skills/blob/abeeaf95660ba9e8b7c753eb38f441ca707a8823/skills/in-progress/software-factory/SKILL.md)
+
+公開リポジトリの Sandcastle には、アプリケーションから `sandcastle.run()` を呼び、ローカル、コンテナ、クラウドの実行環境でエージェントを動かす実装があります。実行に使う環境とブランチ戦略をどう選ぶかを調べる入口になります。[Sandcastle の README](https://github.com/mattpocock/sandcastle/blob/1b380ca5e7a9fbece96c49d9edba264c1f512c4e/README.md)
+
 ## Lauren Tan との関係
 
-Tan の「ミシュランの厨房」は、各コードベースのアーキテクチャ、決定論的なチェック、検証を整える視点です。Pocock の「ソフトウェアファクトリー」は、そうした環境で、仕事を起動してエージェントに任せる仕組みを設計する視点です。両者を合わせて読むと、検証できる環境を整え、結果を確認できる小さな自動化から広げる順序になります。 [Tan の参考メモ](lauren-tan-all-code-is-slop/software-factory-notes.md)
+Tan の「ミシュランの厨房」は、各コードベースのアーキテクチャ、決定論的なチェック、検証を整える視点です。Pocock の「ソフトウェアファクトリー」は、そうした環境で、仕事を起動してエージェントに任せる仕組みを設計する視点です。両者を合わせて読むと、検証できる環境を整え、結果を確認できる小さな自動化から広げる順序になります。 [Tan の参考メモ](lauren-tan.md)

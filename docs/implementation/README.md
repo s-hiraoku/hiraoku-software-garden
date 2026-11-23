@@ -10,7 +10,7 @@ hiraoku-software-garden は、独立したプロジェクトに共通の開発�
 | 対象リポジトリ | プロダクトコード、固有の指示や仕様、ハーネスの実装と依存関係 |
 | 実行環境 | Git の認証、ローカルのチェックアウト、各リポジトリの実行環境と依存パッケージ |
 
-[Matt Pocock の Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern) を作業の起点にし、[Lauren Tan の講演](../lauren-tan-all-code-is-slop/README.md) にある決定的なチェックと再現できる検証を各リポジトリで育てます。共通基盤から既存のコマンドを引数の配列で呼び出すので、対象の言語やエージェントの種類が変わっても実行方法をそろえられます。
+[Matt Pocock の Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern) を作業の起点にし、[Lauren Tan の講演](../references/sources/all-code-is-slop/README.md) にある決定的なチェックと再現できる検証を各リポジトリで育てます。共通基盤から既存のコマンドを引数の配列で呼び出すので、対象の言語やエージェントの種類が変わっても実行方法をそろえられます。
 
 ## 共通の開発ハーネスとプロジェクト固有のハーネス
 
@@ -41,9 +41,9 @@ Garden 配下の全プロジェクトで、開発を進めるための共通ハ�
 
 ライブラリの依存関係、設定、検証コードは対象リポジトリで管理し、そこで実行するチェックコマンドを Garden に登録します。これにより、プロジェクトは自分の用途に合うハーネスを独立して変更でき、Garden からは同じ方法で実行できます。
 
-検証方法を選ぶときは、PR や CI で確認する挙動と、配布・公開後の環境で確かめる挙動を明らかにします。配置、公開、運用に必要な確認はプロジェクトの配布形態に合わせて設計します。[開発から本番運用までの検証](../lauren-tan-all-code-is-slop/verification-lifecycle.md)
+検証方法を選ぶときは、PR や CI で確認する挙動と、配布・公開後の環境で確かめる挙動を明らかにします。配置、公開、運用に必要な確認はプロジェクトの配布形態に合わせて設計します。[開発から本番運用までの検証](../references/sources/all-code-is-slop/verification-lifecycle.md)
 
-講演の Dune は、プロダクトの設計制約を API や lint に組み込んだ例です。自作の一覧描画ライブラリはプロダクトの機能で、そのアルゴリズムの性質を検証する役割を Lean が担います。[Lauren Tan の講演資料](../lauren-tan-all-code-is-slop/README.md)
+講演の Dune は、プロダクトの設計制約を API や lint に組み込んだ例です。自作の一覧描画ライブラリはプロダクトの機能で、そのアルゴリズムの性質を検証する役割を Lean が担います。[Lauren Tan の講演資料](../references/sources/all-code-is-slop/README.md)
 
 ## 現在使える操作
 

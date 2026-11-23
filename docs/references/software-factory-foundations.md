@@ -4,8 +4,11 @@
 
 | 人・組織 | 重視する基礎 |
 | --- | --- |
-| Lauren Tan | 「ミシュランの厨房」として、コードベースのアーキテクチャ、型、lint、決定論的なチェック、動作の検証を自動化に先立って整えます。pstack はその手順を再利用するための一例です。 [講演と対談の参考メモ](lauren-tan-all-code-is-slop/software-factory-notes.md) |
-| Matt Pocock | 仕事を起動するトリガーと実行の仕組みを「ソフトウェアファクトリー」と呼びます。共通の設計語彙を使い、一つのトリガーから始めます。Sandcastle v1 ではスキルを関数として呼び出す構想を示しています。 [Pocock の参考メモ](matt-pocock-software-factory.md) |
+| Lauren Tan | 「ミシュランの厨房」として、コードベースのアーキテクチャ、型、lint、決定論的なチェック、動作の検証を自動化に先立って整えます。pstack はその手順を再利用するための一例です。 [講演と対談の参考メモ](cases/lauren-tan.md) |
+| Matt Pocock | 仕事を起動するトリガーと実行の仕組みを「ソフトウェアファクトリー」と呼びます。共通の設計語彙を使い、一つのトリガーから始めます。Sandcastle v1 ではスキルを関数として呼び出す構想を示しています。 [Pocock の参考メモ](cases/matt-pocock-software-factory.md) |
+| OpenAI | Symphonyでは、チケットの状態と作業環境を照合し、着手できる仕事の割り当て、再試行、停止を管理します。[Symphony の公開仕様と参考メモ](cases/openai.md) |
+| StrongDM | Attractorでは、検証結果による工程の分岐、再試行、人の承認をワークフローの定義に含めます。[Attractor の公開仕様と参考メモ](cases/strongdm.md) |
+| Anthropic | GitHub のイベントごとに、エージェントへ渡す仕事と書き込み権限を定義する例を公開しています。[Claude Code Action の事例](cases/anthropic.md) |
 | Zach Lloyd（Warp） | ファクトリーをクラウド上のインフラとして扱います。定義をコードで持ち、実行結果を測定・評価し、設定やスキルの改善に使います。 [The Factory Stack](https://www.warp.dev/blog/the-factory-stack) · [Closing the loop](https://www.warp.dev/blog/agent-self-improving-software-factories) |
 | SuperPlane | チケットの取り込みから実装、検証、レビュー可能な PR までをつなぐオープンソースの実装です。CI や承認を共通のワークフローに組み込みます。 [SuperPlane の概要](https://docs.superplane.com/get-started/overview/) |
 | HumanLayer | Research / Plan / Implement の手順を再利用し、調査や計画などの成果物をチームで共有します。人間のレビューを、判断の効果が大きい段階に入れます。 [Advanced Context Engineering](https://www.humanlayer.dev/blog/advanced-context-engineering) · [HumanLayer](https://www.humanlayer.dev/) |
@@ -24,6 +27,6 @@ Lloyd は、プロンプトをつないでクラウドエージェントを動�
 
 ## Garden での適用案
 
-**品質ゲートを先に固め、最初の検証から測定します。** 守るべき挙動や制約を一つ選び、違反時にチェックが失敗し、修正で通ることを確かめます。制約とチェックの実装は対象リポジトリに置き、Garden は共通の手順、チェックの呼び出し、結果の形式を持ちます。 [Home Repo の設計と使い方](implementation/README.md)
+**品質ゲートを先に固め、最初の検証から測定します。** 守るべき挙動や制約を一つ選び、違反時にチェックが失敗し、修正で通ることを確かめます。制約とチェックの実装は対象リポジトリに置き、Garden は共通の手順、チェックの呼び出し、結果の形式を持ちます。 [Home Repo の設計と使い方](../implementation/README.md)
 
 そのチェックを使って、トリガー一つと作業一種類のループを試します。例えば、定期実行で lint 違反を一件直し、チェック結果を添えた PR を人がレビューします。初回から成否、所要時間、人の手直しの有無を記録し、取得できる場合はトークンや実行費用も残します。この結果から、次に強くするチェックや広げる自動化を決めます。
