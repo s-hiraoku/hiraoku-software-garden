@@ -24,7 +24,7 @@ MODE_RANK = {
 }
 CHECK_KINDS = ("check", "formal_check")
 CHECK_STATUSES = ("active", "proposed")
-FORMAL_TOOLS = ("tlc", "quint", "lean4")
+FORMAL_TOOLS = ("tlc", "quint", "lean4", "python-exhaustive")
 AGENT_ADAPTERS = ("codex", "claude", "antigravity", "custom", "mock")
 FLOW_SCOPES = ("flow_checks", "all_specs")
 STEP_TYPES = ("check", "agent", "gate", "report")

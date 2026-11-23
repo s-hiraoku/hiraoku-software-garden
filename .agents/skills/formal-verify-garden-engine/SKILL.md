@@ -14,11 +14,13 @@ This skill runs a bounded exhaustive verifier directly against the real Python p
   - `src/garden/engine.py`: `run_flow`, `_evaluate_criteria`, `_apply_effective_delegation`, `VERDICT_EXIT_CODES`
   - `src/garden/artifacts.py`: `resolve_report_kind`
   - `src/garden/definition.py`: `load_definition_bytes`, `_merge_strict_delegation`, `MODE_RANK`
+  - `src/garden/guard.py`: `match_glob`, `_strip_dot_slash`
+  - `src/garden/publish.py`: `evaluate_reflect_gate`
 
 Check whether your change touches covered code before deciding to skip:
 
 ```sh
-git diff --name-only ed1de83 -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py
+git diff --name-only ed1de83 -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
 ```
 
 If that command outputs any file, you **must** run the verifier below and confirm whether the verifier still matches the code at your new commit.
@@ -31,6 +33,8 @@ If that command outputs any file, you **must** run the verifier below and confir
 4. **`INV-RETRY-BOUND`** — *Property:* `retries_used` never exceeds `effective_delegation.max_retries` across any combination of `on_fail`, `on_inconclusive`, and retry limits (`0..2`). *Harm if broken:* Runaway retry loops burn agent cost and time caps.
 5. **`INV-DELEGATION-MONOTONICITY`** — *Property:* Flow-level `[flows.<name>.delegation]` overrides can never relax `mode`, expand `allowed_paths`, raise `max_retries` / `max_cost_usd`, remove `require_checks`, or drop mandatory `forbidden_paths` (`.garden/**` and `[spec].paths`). *Harm if broken:* A flow definition silently escalates its own write or auto-merge authority beyond repo policy.
 6. **`INV-OBSERVE-ONLY-NO-AGENT`** — *Property:* When Trust Anchor downgrades `effective_delegation.mode` to `observe_only` at runtime (e.g., on a spec-modifying PR), `fix_and_retry` never invokes a mutating `agent` step. *Harm if broken:* The engine spends agent tokens/time and attempts edits on a read-only run instead of halting cleanly.
+7. **`INV-GUARD-PATH-SOUNDNESS`** — *Property:* `match_glob` preserves leading dots on hidden directories (`.garden/**`, `.github/workflows/**`) and strips only leading `./`, never confusing `garden/` with `.garden/` or missing nested forbidden paths. *Harm if broken:* Forbidden paths slip past the guard or unrelated directories trigger false blocks.
+8. **`INV-REFLECT-GATE-SOUNDNESS`** — *Property:* `evaluate_reflect_gate` permits `auto_merge` only when `verdict == "SATISFIED"`, `mode == "auto_merge"`, `worktree_branch` is present, `evaluation_criteria_changed == False`, `flow_scope == "all_specs"`, and every criterion is `satisfied`; non-`SATISFIED` or `observe_only` runs are always `blocked`. *Harm if broken:* Unverified or criteria-mutating changes could be queued for auto-merge.
 
 ## Tool choice, bounds, and what is NOT covered
 
@@ -49,7 +53,7 @@ If that command outputs any file, you **must** run the verifier below and confir
 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
 ```
 
-Expected passing output: exit code `0`, `"total_states_checked": 58767`, all six invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`.
+Expected passing output: exit code `0`, `"total_states_checked": 59442`, all eight invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`. When `GARDEN_EVIDENCE_DIR` is set, it also writes `$GARDEN_EVIDENCE_DIR/formal.json` for native `kind = "formal_check"` integration.
 
 ## Interpreting failures (real bug vs verifier drift)
 

@@ -13,6 +13,7 @@ from garden.doctor import run_doctor
 from garden.engine import run_flow
 from garden.feedback import VALID_CATEGORIES, VALID_STATUSES, add_intervention, summarize_interventions
 from garden.git_utils import GitError
+from garden.publish import reflect_run
 from garden.report import format_report, post_github_report
 from garden.templates import apply_upgrade, init_garden, plan_upgrade
 
@@ -77,6 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
     rep_cmd.add_argument("run_dir", type=Path)
     rep_cmd.add_argument("--format", dest="fmt", choices=("md", "json"), default="md")
     rep_cmd.add_argument("--post-github-issue", type=int, default=None)
+
+    ref_cmd = commands.add_parser(
+        "reflect", help="evaluate Phase-6 reflection gate (dry-run by default)"
+    )
+    ref_cmd.add_argument("run_dir", type=Path)
+    ref_cmd.add_argument("--base", default="main")
+    ref_cmd.add_argument("--execute", action="store_true")
 
     # Phase-7 intervention feedback
     fb_cmd = commands.add_parser("feedback", help="record or summarize human interventions")
@@ -239,6 +247,20 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             print(format_report(args.run_dir, fmt=args.fmt))
             return 0
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+
+    if args.action == "reflect":
+        try:
+            reflected = reflect_run(
+                args.run_dir, base_branch=args.base, execute=args.execute
+            )
+            print(json.dumps(reflected, ensure_ascii=False, indent=2))
+            return 1 if reflected["allowed_action"] == "blocked" else 0
         except ValueError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
