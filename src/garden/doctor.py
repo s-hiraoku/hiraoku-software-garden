@@ -10,6 +10,7 @@ import subprocess
 import tomllib
 from typing import Any
 
+from garden.resources import nursery_root as _resolve_nursery_root
 from garden.definition import GARDEN_DEF_REL_PATH, DefinitionError, load_definition
 from garden.git_utils import GitError, list_remotes, repo_root
 from garden.spec import verify_trust_anchor
@@ -31,7 +32,7 @@ class DiagnosticItem:
 
 
 def _nursery_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return _resolve_nursery_root()
 
 
 def _load_pstack_manifest(nursery_root: Path) -> dict[str, Any] | None:

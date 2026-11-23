@@ -9,6 +9,7 @@ import re
 import tomllib
 from typing import Any
 
+from garden.resources import nursery_root as _resolve_nursery_root
 from garden.definition import GARDEN_DEF_REL_PATH, load_definition
 from garden.spec import SpecError, parse_spec_markdown
 
@@ -64,7 +65,7 @@ class UpgradePlan:
 
 
 def default_nursery_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return _resolve_nursery_root()
 
 
 def available_template_versions(
