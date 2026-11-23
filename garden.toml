@@ -1,1 +1,7 @@
 [repositories]
+
+[repositories.hiraoku-agent-base]
+path = "hiraoku-agent-base"
+remote = "https://github.com/s-hiraoku/hiraoku-agent-base.git"
+description = "HAB: エージェント間のメッセージ送受信基盤（1号目の対象リポジトリ、cli/v1）"
+check = ["npm", "run", "demo:hab-mvp", "--", "--simulate"]
