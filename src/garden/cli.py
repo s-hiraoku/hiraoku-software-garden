@@ -11,9 +11,19 @@ from garden.catalog import check_repository, read_catalog
 from garden.definition import DefinitionError
 from garden.doctor import run_doctor
 from garden.engine import run_flow
-from garden.feedback import VALID_CATEGORIES, VALID_STATUSES, add_intervention, summarize_interventions
+from garden.feedback import (
+    VALID_CATEGORIES,
+    VALID_STATUSES,
+    add_intervention,
+    parse_feedback_comment,
+    summarize_interventions,
+    update_intervention,
+)
+from garden.fleet import collect_fleet_status
 from garden.git_utils import GitError
+from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
+from garden.release_gate import run_template_release_gate
 from garden.report import format_report, post_github_report
 from garden.templates import apply_upgrade, init_garden, plan_upgrade
 
@@ -101,6 +111,49 @@ def build_parser() -> argparse.ArgumentParser:
 
     fb_sum = fb_sub.add_parser("summary", help="summarize recorded interventions")
     fb_sum.add_argument("--target", type=Path, default=Path.cwd())
+
+    fb_cmt = fb_sub.add_parser(
+        "from-comment",
+        help="parse a '/garden feedback ...' comment and record the intervention",
+    )
+    fb_cmt.add_argument("--target", type=Path, default=Path.cwd())
+    fb_cmt_src = fb_cmt.add_mutually_exclusive_group(required=True)
+    fb_cmt_src.add_argument("--body", default=None)
+    fb_cmt_src.add_argument("--body-file", type=Path, default=None)
+    fb_cmt.add_argument("--run-id", default=None, help="fallback run_id if omitted in comment")
+
+    fb_upd = fb_sub.add_parser("update", help="update status or preventive details of an intervention")
+    fb_upd.add_argument("--target", type=Path, default=Path.cwd())
+    fb_upd.add_argument("--id", dest="intervention_id", required=True)
+    fb_upd.add_argument("--status", choices=VALID_STATUSES, default=None)
+    fb_upd.add_argument("--preventive-action", default=None)
+    fb_upd.add_argument("--preventive-check-ref", default=None)
+    fb_upd.add_argument("--triage-step", action="append", default=[])
+
+    # Operational metrics & template release gate
+    met_cmd = commands.add_parser(
+        "metrics", help="aggregate operational health metrics from runs and interventions"
+    )
+    met_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    met_cmd.add_argument("--limit", type=int, default=None)
+
+    gate_cmd = commands.add_parser(
+        "template-gate",
+        help="run template release gate (fresh init pass/fail + upgrade) and emit release-evidence.json",
+    )
+    gate_cmd.add_argument("--type", dest="template_type", default=None)
+    gate_cmd.add_argument("--version", type=int, default=None)
+    gate_cmd.add_argument("--all", dest="all_templates", action="store_true")
+    gate_cmd.add_argument("--output", type=Path, default=None)
+
+    status_cmd = commands.add_parser(
+        "status",
+        help="show aggregated health, doctor, template version, and metrics across all Gardens",
+    )
+    status_cmd.add_argument("--approval-branch", default="main")
+    status_cmd.add_argument("--no-self", action="store_true", help="exclude Nursery self-dogfood garden")
+    status_cmd.add_argument("--skip-network", action="store_true")
+    status_cmd.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -289,12 +342,96 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 return 0
+            if args.fb_action == "from-comment":
+                body_text = (
+                    args.body
+                    if args.body is not None
+                    else args.body_file.read_text(encoding="utf-8")
+                )
+                parsed = parse_feedback_comment(body_text, default_run_id=args.run_id)
+                out_path, record = add_intervention(args.target, **parsed)
+                print(
+                    json.dumps(
+                        {"path": str(out_path), "record": record},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
+            if args.fb_action == "update":
+                out_path, record = update_intervention(
+                    args.target,
+                    args.intervention_id,
+                    status=args.status,
+                    preventive_action=args.preventive_action,
+                    preventive_check_ref=args.preventive_check_ref,
+                    add_triage_steps=args.triage_step or None,
+                )
+                print(
+                    json.dumps(
+                        {"path": str(out_path), "record": record},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             summary = summarize_interventions(args.target)
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
         except (OSError, ValueError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
+
+    if args.action == "metrics":
+        try:
+            metrics = collect_garden_metrics(args.target, limit=args.limit)
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps(metrics, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.action == "template-gate":
+        try:
+            evidence = run_template_release_gate(
+                template_type=args.template_type,
+                version=args.version,
+                all_templates=args.all_templates,
+                output_path=args.output,
+            )
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(json.dumps(evidence, ensure_ascii=False, indent=2))
+        return 0 if evidence["overall_passed"] else 1
+
+    if args.action == "status":
+        try:
+            fleet = collect_fleet_status(
+                args.catalog,
+                args.workspace,
+                include_self=not args.no_self,
+                approval_branch=args.approval_branch,
+                skip_network=args.skip_network,
+            )
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        if args.as_json:
+            print(json.dumps(fleet, ensure_ascii=False, indent=2))
+        else:
+            for g in fleet["gardens"]:
+                latest = g.get("latest_run") or {}
+                verdict = latest.get("verdict") or "-"
+                tpl = g.get("template")
+                tpl_str = f"{tpl['name']}@v{tpl['version']}" if tpl else "-"
+                print(
+                    f"[{g['health'].upper():12}] {g['repo']} ({tpl_str}) latest={verdict}"
+                )
+        return 1 if fleet["has_errors"] else 0
 
     parser.error(f"unknown action: {args.action}")
     return 2

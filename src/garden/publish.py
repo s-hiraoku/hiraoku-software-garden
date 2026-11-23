@@ -34,7 +34,9 @@ class ReflectDecision:
         }
 
 
-def evaluate_reflect_gate(run_data: dict[str, Any]) -> ReflectDecision:
+def evaluate_reflect_gate(
+    run_data: dict[str, Any], *, target_on_base: bool | None = None
+) -> ReflectDecision:
     """Deterministically evaluate what reflection action (if any) is permitted for a run."""
     run_id = str(run_data.get("run_id") or "")
     verdict = str(run_data.get("verdict") or "UNKNOWN")
@@ -92,6 +94,18 @@ def evaluate_reflect_gate(run_data: dict[str, Any]) -> ReflectDecision:
             run_id=run_id,
             allowed_action="none",
             reasons=("no_verified_commit_diff",),
+            worktree_branch=branch_str,
+            verified_commit=verified_str,
+            target_commit=target_commit,
+            effective_mode=eff_mode,
+            verdict=verdict,
+        )
+
+    if target_on_base is False:
+        return ReflectDecision(
+            run_id=run_id,
+            allowed_action="blocked",
+            reasons=("target_commit_not_on_base_branch",),
             worktree_branch=branch_str,
             verified_commit=verified_str,
             target_commit=target_commit,
@@ -172,10 +186,30 @@ def _find_git_root(path: Path) -> Path | None:
     return Path(proc.stdout.strip())
 
 
+def _resolve_base_ref(git_root: Path, base_branch: str) -> str | None:
+    if not base_branch or base_branch.startswith("-") or ".." in base_branch:
+        return None
+    for candidate in (f"refs/heads/{base_branch}", f"refs/remotes/origin/{base_branch}"):
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", candidate],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return candidate
+    return None
+
+
 def _verify_branch_in_git(
-    git_root: Path, decision: ReflectDecision
+    git_root: Path,
+    decision: ReflectDecision,
+    *,
+    base_branch: str,
+    agent_changed_files: list[str] | None,
 ) -> ReflectDecision:
-    """Confirm the branch tip matches verified_commit and has a non-empty diff vs target_commit."""
+    """Confirm branch tip, base-branch ancestry, and guard-approved diff before reflection."""
     assert decision.worktree_branch is not None
     assert decision.verified_commit is not None
 
@@ -209,25 +243,75 @@ def _verify_branch_in_git(
             reasons=("missing_target_commit",),
         )
 
-    diff_proc = subprocess.run(
-        ["git", "diff", "--quiet", decision.target_commit, tip_sha],
+    # Ensure target_commit is already on base_branch so unreviewed PR commits can never
+    # piggyback onto an automated reflection PR or auto-merge into base_branch.
+    base_ref = _resolve_base_ref(git_root, base_branch)
+    if base_ref is None:
+        return replace(
+            decision,
+            allowed_action="blocked",
+            reasons=(f"base_branch_not_found:{base_branch}",),
+        )
+
+    anc_proc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", decision.target_commit, base_ref],
         cwd=git_root,
         capture_output=True,
         text=True,
         check=False,
     )
-    if diff_proc.returncode == 0:
+    if anc_proc.returncode == 1:
         return replace(
             decision,
-            allowed_action="none",
-            reasons=("empty_diff_against_target_commit",),
+            allowed_action="blocked",
+            reasons=(f"target_commit_not_on_base_branch:{base_branch}",),
         )
-    if diff_proc.returncode != 1:
+    if anc_proc.returncode != 0:
+        return replace(
+            decision,
+            allowed_action="blocked",
+            reasons=("base_ancestry_verification_failed",),
+        )
+
+    diff_proc = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", decision.target_commit, tip_sha],
+        cwd=git_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if diff_proc.returncode != 0:
         return replace(
             decision,
             allowed_action="blocked",
             reasons=("diff_verification_failed",),
         )
+
+    diff_files = [
+        line.strip() for line in diff_proc.stdout.splitlines() if line.strip()
+    ]
+    if not diff_files:
+        return replace(
+            decision,
+            allowed_action="none",
+            reasons=("empty_diff_against_target_commit",),
+        )
+
+    if not agent_changed_files:
+        return replace(
+            decision,
+            allowed_action="blocked",
+            reasons=("missing_agent_changed_files",),
+        )
+
+    unapproved = sorted(set(diff_files) - set(agent_changed_files))
+    if unapproved:
+        return replace(
+            decision,
+            allowed_action="blocked",
+            reasons=(f"unapproved_files_in_verified_commit:{','.join(unapproved)}",),
+        )
+
     return decision
 
 
@@ -244,9 +328,21 @@ def reflect_run(
     git_root = _find_git_root(cwd) if cwd is not None else _find_git_root(run_dir)
     git_verified = False
 
+    raw_agent_files = run_data.get("agent_changed_files")
+    agent_changed_files = (
+        [str(p) for p in raw_agent_files if isinstance(p, str) and p.strip()]
+        if isinstance(raw_agent_files, list)
+        else None
+    )
+
     if decision.allowed_action in ("propose_pr", "auto_merge"):
         if git_root is not None:
-            decision = _verify_branch_in_git(git_root, decision)
+            decision = _verify_branch_in_git(
+                git_root,
+                decision,
+                base_branch=base_branch,
+                agent_changed_files=agent_changed_files,
+            )
             git_verified = True
         elif execute:
             raise RuntimeError(
@@ -254,6 +350,7 @@ def reflect_run(
             )
 
     result: dict[str, Any] = decision.to_dict() | {
+        "base_branch": base_branch,
         "git_verified": git_verified,
         "dry_run": not execute,
         "executed": False,

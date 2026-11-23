@@ -493,6 +493,7 @@ def run_flow(
         requested_report_kind: str,
         worktree_branch: str | None = None,
         verified_commit: str | None = None,
+        agent_changed_files: list[str] | None = None,
     ) -> EngineRunResult:
         finished_dt = datetime.now(timezone.utc)
         duration_sec = round(time.monotonic() - started_mono, 3)
@@ -524,6 +525,7 @@ def run_flow(
             },
             "worktree_branch": worktree_branch,
             "verified_commit": verified_commit,
+            "agent_changed_files": list(agent_changed_files or []),
             "started_at": started_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "finished_at": finished_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "duration_sec": duration_sec,
@@ -1028,6 +1030,7 @@ def run_flow(
             requested_report_kind=requested_report_kind,
             worktree_branch=recorded_branch,
             verified_commit=verified_commit,
+            agent_changed_files=sorted(agent_changed_paths),
         )
     finally:
         if created_worktree and not keep_worktree:

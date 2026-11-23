@@ -27,19 +27,33 @@ on:
         required: false
         type: string
         default: "main"
-
-concurrency:
-  group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
-  cancel-in-progress: false
+      reflect:
+        description: "Execute Phase-6 reflection gate (garden reflect --execute) when verdict is SATISFIED (requires caller permissions contents:write, pull-requests:write, repo PR creation setting, and target_commit on base_branch)"
+        required: false
+        type: boolean
+        default: false
+      base_branch:
+        description: "Base branch for Phase-6 reflection PR creation"
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      reflect_token:
+        description: "Optional GitHub App token / PAT for Phase-6 reflect push, PR creation, and auto-merge (default GITHUB_TOKEN cannot trigger downstream required workflows on PRs it opens)"
+        required: false
 
 jobs:
   run-garden:
     runs-on: ubuntu-latest
+    concurrency:
+      group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.reflect_token || github.token }}
 
       - name: Authorize and checkout PR head on issue_comment resume
         if: github.event_name == 'issue_comment'
@@ -115,18 +129,18 @@ jobs:
           EXIT_CODE=$?
           echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
           python3 - "${LAST_RUN_JSON}" "${GITHUB_OUTPUT}" <<'PY'
-import json, pathlib, sys
-src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-try:
-    d = json.loads(src.read_text(encoding="utf-8"))
-    run_dir = d.get("run_dir") or ""
-    skipped = "true" if d.get("skipped_duplicate") else "false"
-except Exception:
-    run_dir, skipped = "", "false"
-with out.open("a", encoding="utf-8") as fh:
-    fh.write(f"run_dir={run_dir}\n")
-    fh.write(f"skipped_duplicate={skipped}\n")
-PY
+          import json, pathlib, sys
+          src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          try:
+              d = json.loads(src.read_text(encoding="utf-8"))
+              run_dir = d.get("run_dir") or ""
+              skipped = "true" if d.get("skipped_duplicate") else "false"
+          except Exception:
+              run_dir, skipped = "", "false"
+          with out.open("a", encoding="utf-8") as fh:
+              fh.write(f"run_dir={run_dir}\n")
+              fh.write(f"skipped_duplicate={skipped}\n")
+          PY
           exit "${EXIT_CODE}"
 
       - name: Upload Run Artifacts
@@ -144,6 +158,22 @@ PY
           python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
             "${{ steps.garden_run.outputs.run_dir }}" \
             --post-github-issue "${{ inputs.issue_number }}"
+
+      - name: Execute Phase-6 reflection gate
+        # Explicit success() ensures reflect only runs when checkout, run, artifact upload, and report succeeded.
+        # Note: caller workflows enabling reflect=true need `contents: write` + `pull-requests: write`,
+        # repository setting "Allow GitHub Actions to create and approve pull requests", and for
+        # protected branches with required status checks a GitHub App token via `secrets.reflect_token`
+        # (because PRs opened with default GITHUB_TOKEN do not trigger downstream workflows).
+        if: success() && inputs.reflect && steps.garden_run.outputs.exit_code == '0' && steps.garden_run.outputs.run_dir != '' && steps.garden_run.outputs.skipped_duplicate != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.reflect_token || github.token }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" reflect \
+            "${{ steps.garden_run.outputs.run_dir }}" \
+            --base "${BASE_BRANCH}" \
+            --execute
 
       - name: Propagate deterministic verdict exit code
         if: always()

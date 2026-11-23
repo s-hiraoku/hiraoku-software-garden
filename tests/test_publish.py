@@ -19,6 +19,7 @@ class ReflectGateTests(unittest.TestCase):
             "verdict": "SATISFIED",
             "worktree_branch": "garden/20261123T100000Z-12345678",
             "verified_commit": "b" * 40,
+            "agent_changed_files": ["src/app.txt"],
             "target": {
                 "commit": "a" * 40,
                 "evaluation_criteria_changed": False,
@@ -145,3 +146,52 @@ class ReflectGateTests(unittest.TestCase):
             self.assertEqual(ref_noop.returncode, 0, ref_noop.stderr)
             noop_ref_data = json.loads(ref_noop.stdout)
             self.assertEqual(noop_ref_data["allowed_action"], "none")
+
+    def test_reflect_blocks_unreviewed_contributor_pr_branch_and_unapproved_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = _build_fixture_repo(tmp_path / "pr-attack", app_value="OK")
+
+            # Contributor PR branch adds src/backdoor.txt and breaks src/app.txt
+            git(repo, "checkout", "-b", "contributor-pr")
+            (repo / "src" / "backdoor.txt").write_text("unreviewed\n", encoding="utf-8")
+            (repo / "src" / "app.txt").write_text("BROKEN\n", encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-m", "contributor pr with backdoor")
+
+            run_fix = run_cli(
+                "run", "verify_and_fix", "--target", str(repo), "--approval-branch", "main", "--json"
+            )
+            self.assertEqual(run_fix.returncode, 0, run_fix.stderr)
+            payload = json.loads(run_fix.stdout)
+            self.assertEqual(payload["verdict"], "SATISFIED")
+            self.assertEqual(payload["run"]["agent_changed_files"], ["src/app.txt"])
+
+            # Reflecting against --base main MUST be blocked because target_commit is not on main
+            ref_main = run_cli("reflect", payload["run_dir"], "--base", "main")
+            self.assertEqual(ref_main.returncode, 1)
+            main_data = json.loads(ref_main.stdout)
+            self.assertEqual(main_data["allowed_action"], "blocked")
+            self.assertIn("target_commit_not_on_base_branch:main", main_data["reasons"])
+
+            # Reflecting against the PR's own branch (--base contributor-pr) succeeds because
+            # target_commit IS on contributor-pr and diff contains only guard-approved src/app.txt
+            ref_pr = run_cli("reflect", payload["run_dir"], "--base", "contributor-pr")
+            self.assertEqual(ref_pr.returncode, 0, ref_pr.stderr)
+            pr_data = json.loads(ref_pr.stdout)
+            self.assertEqual(pr_data["allowed_action"], "auto_merge")
+            self.assertTrue(pr_data["git_verified"])
+
+            # Tampering run.json to omit src/app.txt from agent_changed_files MUST block
+            run_json = Path(payload["run_dir"]) / "run.json"
+            mutated = json.loads(run_json.read_text(encoding="utf-8"))
+            mutated["agent_changed_files"] = ["src/other.txt"]
+            run_json.write_text(json.dumps(mutated), encoding="utf-8")
+
+            ref_unapproved = run_cli("reflect", payload["run_dir"], "--base", "contributor-pr")
+            self.assertEqual(ref_unapproved.returncode, 1)
+            unapp_data = json.loads(ref_unapproved.stdout)
+            self.assertEqual(unapp_data["allowed_action"], "blocked")
+            self.assertTrue(
+                any(r.startswith("unapproved_files_in_verified_commit:") for r in unapp_data["reasons"])
+            )
