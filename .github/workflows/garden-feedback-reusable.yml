@@ -1,0 +1,155 @@
+name: Garden Reusable Feedback Recorder
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: "Issue or PR number where the /garden feedback comment was posted"
+        required: true
+        type: number
+      default_run_id:
+        description: "Fallback run_id if omitted in the /garden feedback comment"
+        required: false
+        type: string
+        default: ""
+      nursery_ref:
+        description: "Git ref of hiraoku-software-garden to use for the CLI"
+        required: false
+        type: string
+        default: "main"
+      open_pr:
+        description: "Commit the recorded .garden/interventions/<id>.json to a branch and open a PR against base_branch so it persists for garden metrics / feedback summary (requires caller permissions contents:write and pull-requests:write)"
+        required: false
+        type: boolean
+        default: false
+      base_branch:
+        description: "Base branch for the persistence PR when open_pr is true"
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      feedback_token:
+        description: "Optional GitHub App token / PAT for pushing and opening the persistence PR when open_pr is true"
+        required: false
+
+jobs:
+  record-feedback:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: garden-feedback-${{ inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Authorize commenter
+        env:
+          AUTHOR_ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          case "${AUTHOR_ASSOC}" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "error: unauthorized commenter association '${AUTHOR_ASSOC}' for /garden feedback" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+          token: ${{ secrets.feedback_token || github.token }}
+
+      - name: Clone Nursery CLI outside target checkout
+        env:
+          NURSERY_REF: ${{ inputs.nursery_ref }}
+        run: |
+          rm -rf "${RUNNER_TEMP}/garden-nursery"
+          git clone --depth 1 --branch "${NURSERY_REF}" \
+            https://github.com/s-hiraoku/hiraoku-software-garden.git \
+            "${RUNNER_TEMP}/garden-nursery"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Parse and record /garden feedback comment
+        id: record
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          DEFAULT_RUN_ID: ${{ inputs.default_run_id }}
+        run: |
+          BODY_FILE="${RUNNER_TEMP}/garden-feedback-comment.txt"
+          OUT_JSON="${RUNNER_TEMP}/garden-feedback-record.json"
+          printf '%s\n' "${COMMENT_BODY}" > "${BODY_FILE}"
+
+          ARGS=(
+            python3 "${RUNNER_TEMP}/garden-nursery/garden.py" feedback from-comment
+            --target .
+            --body-file "${BODY_FILE}"
+          )
+          if [ -n "${DEFAULT_RUN_ID}" ]; then
+            ARGS+=(--run-id "${DEFAULT_RUN_ID}")
+          fi
+          "${ARGS[@]}" > "${OUT_JSON}"
+          cat "${OUT_JSON}"
+
+          python3 - "${OUT_JSON}" "${GITHUB_OUTPUT}" <<'PY'
+          import json, pathlib, sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          rec = data["record"]
+          def _one_line(val: object) -> str:
+              return str(val).replace("\r", " ").replace("\n", " ").strip()
+          with pathlib.Path(sys.argv[2]).open("a", encoding="utf-8") as fh:
+              fh.write(f"record_path={_one_line(data['path'])}\n")
+              fh.write(f"intervention_id={_one_line(rec['intervention_id'])}\n")
+              fh.write(f"category={_one_line(rec['category'])}\n")
+              fh.write(f"run_id={_one_line(rec['run_id'])}\n")
+          PY
+
+      - name: Upload Intervention Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: garden-intervention-${{ steps.record.outputs.intervention_id }}
+          path: ${{ steps.record.outputs.record_path }}
+
+      - name: Open PR to persist intervention record
+        id: persist_pr
+        if: success() && inputs.open_pr
+        env:
+          GH_TOKEN: ${{ secrets.feedback_token || github.token }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          ISSUE_NUM: ${{ inputs.issue_number }}
+          RECORD_PATH: ${{ steps.record.outputs.record_path }}
+          INTERVENTION_ID: ${{ steps.record.outputs.intervention_id }}
+          CATEGORY: ${{ steps.record.outputs.category }}
+          RUN_ID: ${{ steps.record.outputs.run_id }}
+        run: |
+          BRANCH="garden/feedback-${INTERVENTION_ID}"
+          git checkout -b "${BRANCH}"
+          git add -- "${RECORD_PATH}"
+          git -c commit.gpgsign=false \
+            -c user.name="Software Garden" \
+            -c user.email="garden@local.invalid" \
+            commit -m "chore(garden): record intervention ${INTERVENTION_ID} (${CATEGORY})"
+          git push -u origin "${BRANCH}"
+          PR_URL=$(gh pr create \
+            --base "${BASE_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "[Garden] feedback(${CATEGORY}): ${INTERVENTION_ID}" \
+            --body "Persists intervention record \`${INTERVENTION_ID}\` (run \`${RUN_ID}\`, source #${ISSUE_NUM}) into \`.garden/interventions/\` for Phase-7 \`garden metrics\` / \`garden feedback summary\`.")
+          echo "pr_url=${PR_URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Confirm recorded intervention on Issue / PR
+        if: inputs.issue_number != 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ inputs.issue_number }}
+          INTERVENTION_ID: ${{ steps.record.outputs.intervention_id }}
+          CATEGORY: ${{ steps.record.outputs.category }}
+          RUN_ID: ${{ steps.record.outputs.run_id }}
+          PR_URL: ${{ steps.persist_pr.outputs.pr_url }}
+        run: |
+          MSG="Recorded Garden intervention \`${INTERVENTION_ID}\` (category: \`${CATEGORY}\`, run: \`${RUN_ID}\`). Artifact uploaded to workflow run #${GITHUB_RUN_ID}."
+          if [ -n "${PR_URL}" ]; then
+            MSG="${MSG} Persistence PR: ${PR_URL}"
+          fi
+          gh issue comment "${ISSUE_NUM}" --body "${MSG}"

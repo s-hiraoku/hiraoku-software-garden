@@ -92,3 +92,16 @@ class WorkflowYamlTests(unittest.TestCase):
         )
         self.assertIn("git archive origin/main", text)
         self.assertIn("TRUSTED_CLI", text)
+
+    def test_garden_feedback_reusable_workflow_enforces_authorization_and_body_file(self):
+        text = (
+            REPO_ROOT / ".github" / "workflows" / "garden-feedback-reusable.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workflow_call:", text)
+        self.assertIn("OWNER|MEMBER|COLLABORATOR", text)
+        self.assertIn("--body-file", text)
+        self.assertIn("open_pr:", text)
+        self.assertIn("feedback_token:", text)
+        self.assertIn("ref: ${{ inputs.base_branch }}", text)
+        self.assertNotIn("\nconcurrency:\n", text)
+        self.assertIn("\n    concurrency:\n", text)

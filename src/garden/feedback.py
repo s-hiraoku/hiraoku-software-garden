@@ -46,6 +46,8 @@ def add_intervention(
         raise ValueError(f"status must be one of {', '.join(VALID_STATUSES)}")
     if not run_id.strip():
         raise ValueError("run_id must be a non-empty string")
+    if any(ch in run_id for ch in ("\n", "\r")) or any(ord(ch) < 32 for ch in run_id):
+        raise ValueError("run_id must not contain newlines or control characters")
     if not summary.strip():
         raise ValueError("summary must be a non-empty string")
 
