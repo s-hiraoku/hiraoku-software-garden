@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from garden.catalog import check_repository, read_catalog
+from garden.catalog import check_repository, read_catalog, register_repository
 from garden.definition import DefinitionError
 from garden.doctor import run_doctor
 from garden.engine import run_flow
@@ -25,6 +25,8 @@ from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
 from garden.release_gate import run_template_release_gate
 from garden.report import format_report, post_github_report
+from garden.spec import SpecError
+from garden.spec_diff import analyze_spec_diff
 from garden.templates import apply_upgrade, init_garden, plan_upgrade
 
 
@@ -46,6 +48,22 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("list", help="list registered repositories")
     check = commands.add_parser("check", help="run the checks for selected repositories")
     check.add_argument("repo", nargs="+", help="repository ID from the catalog")
+
+    reg_cmd = commands.add_parser(
+        "register", help="register a target repository into the Nursery catalog (garden.toml)"
+    )
+    reg_cmd.add_argument("target", type=Path, help="path to the target Git repository")
+    reg_cmd.add_argument("--id", dest="repo_id", default=None)
+    reg_cmd.add_argument("--description", default=None)
+    reg_cmd.add_argument("--remote", default=None)
+    reg_cmd.add_argument(
+        "--check",
+        nargs=argparse.REMAINDER,
+        dest="check_command",
+        default=None,
+        help="check command argv (pass last, e.g. --check python3 -m unittest)",
+    )
+    reg_cmd.add_argument("--force", action="store_true")
 
     # Target-repository onboarding & diagnostics
     init_cmd = commands.add_parser("init", help="initialize a target repository as a Garden")
@@ -155,6 +173,14 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd.add_argument("--skip-network", action="store_true")
     status_cmd.add_argument("--json", action="store_true", dest="as_json")
 
+    sdiff_cmd = commands.add_parser(
+        "spec-diff",
+        help="compare approved base spec against head/working tree and map impacted checks and flows",
+    )
+    sdiff_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    sdiff_cmd.add_argument("--base", default="main")
+    sdiff_cmd.add_argument("--head", default=None)
+
     return parser
 
 
@@ -186,6 +212,27 @@ def main(argv: list[str] | None = None) -> int:
         ]
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return int(any(result["status"] != "passed" for result in results))
+
+    if args.action == "register":
+        check_cmd = args.check_command
+        if check_cmd and check_cmd[0] == "--":
+            check_cmd = check_cmd[1:]
+        try:
+            registered = register_repository(
+                args.catalog,
+                args.workspace,
+                args.target,
+                repo_id=args.repo_id,
+                description=args.description,
+                remote=args.remote,
+                check_command=check_cmd or None,
+                force=args.force,
+            )
+        except (OSError, ValueError, GitError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps(registered, ensure_ascii=False, indent=2))
+        return 0
 
     if args.action == "init":
         try:
@@ -432,6 +479,17 @@ def main(argv: list[str] | None = None) -> int:
                     f"[{g['health'].upper():12}] {g['repo']} ({tpl_str}) latest={verdict}"
                 )
         return 1 if fleet["has_errors"] else 0
+
+    if args.action == "spec-diff":
+        try:
+            diff_report = analyze_spec_diff(
+                args.target, base_ref=args.base, head_ref=args.head
+            )
+        except (OSError, ValueError, DefinitionError, GitError, SpecError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps(diff_report, ensure_ascii=False, indent=2))
+        return 1 if diff_report["impact"]["requires_garden_update"] else 0
 
     parser.error(f"unknown action: {args.action}")
     return 2

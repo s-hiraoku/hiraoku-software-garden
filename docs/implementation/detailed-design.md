@@ -780,9 +780,11 @@ search_paths = [
 | --- | --- | --- | --- |
 | カタログ（既存互換） | `garden list` | ナーサリーのカタログ（`garden.toml`）を JSON 出力 | `0` 成功 / `2` 設定不正 |
 | カタログ（既存互換） | `garden check <repo-id>...` | カタログ登録済みチェックを実行し JSON 出力 | `0` 全合格 / `1` failed・unavailable あり / `2` 引数・設定不正 |
+| カタログ | `garden register <target> [--id ID] [--description DESC] [--check CMD...]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録 | `0` 成功 / `2` 入力・競合エラー |
 | 導入・保守 | `garden init [--target PATH] [--type TYPE]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
 | 導入・保守 | `garden doctor [--target PATH] [--json]` | 環境・定義・承認仕様・pstack・チェック依存を診断 | `0` error なし / `1` error あり / `2` 定義読込不可 |
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
+| 導入・保守 | `garden spec-diff [--target PATH] [--base REF] [--head REF]` | 承認済み仕様との条件単位差分（追加・削除・変更）と影響チェック・フローを解析 | `0` 整合 / `1` ガーデン更新要（未カバー追加・孤立チェック） / `2` 入力不正 |
 | 導入・保守 | `garden template-gate [--type TYPE] [--version N] [--all] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |
 | 実行・記録 | `garden run <flow> [--target PATH] [--trigger-event E] [--trigger-id ID] [--force] [--keep-worktree]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
 | 実行・記録 | `garden report <run-dir> [--format md\|json] [--post-github-issue N]` | `run.json` から要約生成・GitHub Issue/PR への投稿とラベル更新 | `0` 成功 / `1` 投稿失敗 / `2` 入力不正 |
