@@ -99,17 +99,34 @@ class CatalogRegisterTests(unittest.TestCase):
             self.assertEqual(checked.returncode, 0, checked.stderr)
             self.assertEqual(json.loads(checked.stdout)[0]["status"], "passed")
 
-    def test_register_defaults_check_when_garden_toml_exists(self):
+    def test_register_defaults_check_when_garden_toml_exists_and_runs_without_path_install(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws = Path(tmp)
-            catalog = ws / "garden.toml"
+            # Simulate a Nursery checkout next to the target repo (no `garden` binary on PATH)
+            nursery_dir = ws / "nursery"
+            nursery_dir.mkdir()
+            repo_root = Path(__file__).resolve().parent.parent
+            # Lightweight wrapper forwarding to the real repo's garden.py
+            (nursery_dir / "garden.py").write_text(
+                f"import runpy, sys\nsys.path.insert(0, {str(repo_root)!r})\n"
+                f"runpy.run_path({str(repo_root / 'garden.py')!r}, run_name='__main__')\n",
+                encoding="utf-8",
+            )
+            catalog = nursery_dir / "garden.toml"
             catalog.write_text("[repositories]\n", encoding="utf-8")
 
             repo = ws / "garden-ready"
             init_target_repo(repo)
-            (repo / ".garden").mkdir()
-            (repo / ".garden" / "garden.toml").write_text("schema_version = 1\n", encoding="utf-8")
-            commit_all(repo, "init")
+            init_proc = run_cli("init", "--target", str(repo), "--type", "cli")
+            self.assertEqual(init_proc.returncode, 0, init_proc.stderr)
+            spec_file = repo / "docs" / "specs" / "garden-ready.md"
+            spec_file.write_text(
+                spec_file.read_text(encoding="utf-8").replace(
+                    "status: draft", "status: approved"
+                ),
+                encoding="utf-8",
+            )
+            commit_all(repo, "init approved garden")
 
             reg = run_cli(
                 "--catalog",
@@ -122,5 +139,18 @@ class CatalogRegisterTests(unittest.TestCase):
             self.assertEqual(reg.returncode, 0, reg.stderr)
             entry = json.loads(reg.stdout)["entry"]
             self.assertEqual(
-                entry["check"], ["garden", "doctor", "--target", ".", "--skip-network"]
+                entry["check"],
+                ["python3", "../nursery/garden.py", "doctor", "--target", ".", "--skip-network"],
             )
+
+            # Executing `garden check garden-ready` MUST pass without `garden` on PATH
+            chk = run_cli(
+                "--catalog",
+                str(catalog),
+                "--workspace",
+                str(ws),
+                "check",
+                "garden-ready",
+            )
+            self.assertEqual(chk.returncode, 0, chk.stdout + chk.stderr)
+            self.assertEqual(json.loads(chk.stdout)[0]["status"], "passed")

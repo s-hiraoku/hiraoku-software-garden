@@ -17,6 +17,20 @@ on:
         required: false
         type: string
         default: "main"
+      open_pr:
+        description: "Commit the recorded .garden/interventions/<id>.json to a branch and open a PR against base_branch so it persists for garden metrics / feedback summary (requires caller permissions contents:write and pull-requests:write)"
+        required: false
+        type: boolean
+        default: false
+      base_branch:
+        description: "Base branch for the persistence PR when open_pr is true"
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      feedback_token:
+        description: "Optional GitHub App token / PAT for pushing and opening the persistence PR when open_pr is true"
+        required: false
 
 jobs:
   record-feedback:
@@ -39,6 +53,9 @@ jobs:
 
       - name: Checkout target repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+          token: ${{ secrets.feedback_token || github.token }}
 
       - name: Clone Nursery CLI outside target checkout
         env:
@@ -94,6 +111,33 @@ jobs:
           name: garden-intervention-${{ steps.record.outputs.intervention_id }}
           path: ${{ steps.record.outputs.record_path }}
 
+      - name: Open PR to persist intervention record
+        id: persist_pr
+        if: success() && inputs.open_pr
+        env:
+          GH_TOKEN: ${{ secrets.feedback_token || github.token }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          ISSUE_NUM: ${{ inputs.issue_number }}
+          RECORD_PATH: ${{ steps.record.outputs.record_path }}
+          INTERVENTION_ID: ${{ steps.record.outputs.intervention_id }}
+          CATEGORY: ${{ steps.record.outputs.category }}
+          RUN_ID: ${{ steps.record.outputs.run_id }}
+        run: |
+          BRANCH="garden/feedback-${INTERVENTION_ID}"
+          git checkout -b "${BRANCH}"
+          git add -- "${RECORD_PATH}"
+          git -c commit.gpgsign=false \
+            -c user.name="Software Garden" \
+            -c user.email="garden@local.invalid" \
+            commit -m "chore(garden): record intervention ${INTERVENTION_ID} (${CATEGORY})"
+          git push -u origin "${BRANCH}"
+          PR_URL=$(gh pr create \
+            --base "${BASE_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "[Garden] feedback(${CATEGORY}): ${INTERVENTION_ID}" \
+            --body "Persists intervention record \`${INTERVENTION_ID}\` (run \`${RUN_ID}\`, source #${ISSUE_NUM}) into \`.garden/interventions/\` for Phase-7 \`garden metrics\` / \`garden feedback summary\`.")
+          echo "pr_url=${PR_URL}" >> "${GITHUB_OUTPUT}"
+
       - name: Confirm recorded intervention on Issue / PR
         if: inputs.issue_number != 0
         env:
@@ -102,5 +146,10 @@ jobs:
           INTERVENTION_ID: ${{ steps.record.outputs.intervention_id }}
           CATEGORY: ${{ steps.record.outputs.category }}
           RUN_ID: ${{ steps.record.outputs.run_id }}
+          PR_URL: ${{ steps.persist_pr.outputs.pr_url }}
         run: |
-          gh issue comment "${ISSUE_NUM}" --body "Recorded Garden intervention \`${INTERVENTION_ID}\` (category: \`${CATEGORY}\`, run: \`${RUN_ID}\`). Artifact uploaded to workflow run #${GITHUB_RUN_ID}."
+          MSG="Recorded Garden intervention \`${INTERVENTION_ID}\` (category: \`${CATEGORY}\`, run: \`${RUN_ID}\`). Artifact uploaded to workflow run #${GITHUB_RUN_ID}."
+          if [ -n "${PR_URL}" ]; then
+            MSG="${MSG} Persistence PR: ${PR_URL}"
+          fi
+          gh issue comment "${ISSUE_NUM}" --body "${MSG}"

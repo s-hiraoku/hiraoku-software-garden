@@ -689,6 +689,10 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
 - `code_defect`: エージェントが直しきれなかった実装欠陥
 - `delegation_limit`: 委譲範囲・上限の不足による停止
 
+**CI からの永続化ルール（`garden-feedback-reusable.yml`）**:
+- 既定（`open_pr: false`）では、記録した `.garden/interventions/<id>.json` を Workflow Artifact として保存するのみ（読み取り権限 `contents: read` で動作）。
+- `garden feedback summary` および `garden metrics`（`verified_rate` 等の工程⑦集計）へ永続反映する場合は、呼び出し側ワークフローで `open_pr: true`（要 `contents: write` / `pull-requests: write`、保護ブランチ時は必要に応じて `secrets.feedback_token`）を指定し、介入 JSON のみを専用ブランチ `garden/feedback-<id>` へコミットした PR をマージして対象リポジトリの `.garden/interventions/` へ取り込む。
+
 ---
 
 ## 7. テンプレート実体・共通の開発ハーネス（pstack）・導入と更新

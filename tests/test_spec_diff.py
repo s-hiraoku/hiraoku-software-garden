@@ -194,3 +194,100 @@ class SpecDiffTests(unittest.TestCase):
             self.assertEqual(hist_proc.returncode, 1)
             hist_data = json.loads(hist_proc.stdout)
             self.assertEqual(hist_data["impact"]["uncovered_added_criteria"], ["AC-003"])
+
+    def test_shared_criterion_id_removed_from_one_spec_does_not_orphan_check_covered_by_another_spec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "multi-spec"
+            init_target_repo(repo)
+            (repo / ".garden").mkdir()
+            (repo / ".garden" / ".gitignore").write_text("runs/\nworktrees/\n", encoding="utf-8")
+            (repo / "docs" / "specs").mkdir(parents=True)
+            (repo / "docs" / "specs" / "spec_a.md").write_text(
+                "---\nspec_id: spec-a\nversion: 1\nstatus: approved\ntitle: Spec A\n---\n\n"
+                "- **AC-001**: shared id in A\n- **AC-002**: only in A\n",
+                encoding="utf-8",
+            )
+            (repo / "docs" / "specs" / "spec_b.md").write_text(
+                "---\nspec_id: spec-b\nversion: 1\nstatus: approved\ntitle: Spec B\n---\n\n"
+                "- **AC-001**: shared id in B\n",
+                encoding="utf-8",
+            )
+            (repo / ".garden" / "garden.toml").write_text(
+                f"""\
+schema_version = 1
+
+[template]
+name = "cli"
+version = 1
+
+[common_harness]
+name = "pstack"
+ref = "{PSTACK_SHA}"
+
+[target_harness]
+name = "multi-harness"
+version = 1
+
+[spec]
+paths = ["docs/specs/spec_a.md", "docs/specs/spec_b.md"]
+approval_branch = "main"
+
+[delegation]
+mode = "observe_only"
+allowed_paths = []
+forbidden_paths = [".garden/**", "docs/specs/**", ".github/workflows/**"]
+max_retries = 0
+max_duration_sec = 60
+max_cost_usd = 0.0
+require_checks = ["check_ac1", "check_ac2"]
+
+[checks.check_ac1]
+kind = "check"
+command = ["python3", "-c", "print('ok')"]
+timeout_sec = 30
+covers = ["AC-001"]
+status = "active"
+
+[checks.check_ac2]
+kind = "check"
+command = ["python3", "-c", "print('ok')"]
+timeout_sec = 30
+covers = ["AC-002"]
+status = "active"
+
+[flows.verify]
+scope = "all_specs"
+
+[[flows.verify.steps]]
+id = "c1"
+type = "check"
+check = "check_ac1"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+
+[[flows.verify.steps]]
+id = "c2"
+type = "check"
+check = "check_ac2"
+on_fail = "escalate"
+on_inconclusive = "escalate"
+""",
+                encoding="utf-8",
+            )
+            commit_all(repo, "initial two specs")
+
+            # Delete AC-001 from spec_a.md only; AC-001 remains defined in spec_b.md
+            (repo / "docs" / "specs" / "spec_a.md").write_text(
+                "---\nspec_id: spec-a\nversion: 2\nstatus: approved\ntitle: Spec A\n---\n\n"
+                "- **AC-002**: only in A\n",
+                encoding="utf-8",
+            )
+
+            proc = run_cli("spec-diff", "--target", str(repo), "--base", "main")
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertTrue(data["has_spec_changes"])
+            self.assertEqual(data["impact"]["orphaned_checks"], [])
+            self.assertFalse(data["impact"]["requires_garden_update"])
+            spec_a_diff = next(s for s in data["specs"] if s["spec_id"] == "spec-a")
+            self.assertEqual([r["id"] for r in spec_a_diff["removed"]], ["AC-001"])

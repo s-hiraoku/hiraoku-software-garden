@@ -61,6 +61,7 @@ def analyze_spec_diff(
     all_removed: set[str] = set()
     all_modified: set[str] = set()
     all_unchanged: set[str] = set()
+    all_head_ids: set[str] = set()
     any_change = False
 
     for spath in definition.spec.paths:
@@ -110,6 +111,7 @@ def analyze_spec_diff(
         all_removed.update(item["id"] for item in removed)
         all_modified.update(item["id"] for item in modified)
         all_unchanged.update(unchanged)
+        all_head_ids.update(head_map.keys())
 
         version_changed = (base_doc.version if base_doc else None) != head_doc.version
         status_changed = (base_doc.status if base_doc else None) != head_doc.status
@@ -136,6 +138,10 @@ def analyze_spec_diff(
             }
         )
 
+    # An ID deleted from one spec is truly removed (orphaning covers) only if
+    # no other spec in head still defines that ID.
+    truly_removed = all_removed - all_head_ids
+
     active_covered: set[str] = set()
     impacted_checks: list[dict[str, Any]] = []
     orphaned_checks: list[dict[str, Any]] = []
@@ -146,7 +152,7 @@ def analyze_spec_diff(
         if chk.status == "active":
             active_covered.update(covers)
         mod_hit = sorted(covers & all_modified)
-        rem_hit = sorted(covers & all_removed)
+        rem_hit = sorted(covers & truly_removed)
         add_hit = sorted(covers & all_added)
         if rem_hit:
             orphaned_checks.append(

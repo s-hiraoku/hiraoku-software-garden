@@ -127,7 +127,19 @@ def register_repository(
     if check_command:
         resolved_check = list(check_command)
     elif (root / ".garden" / "garden.toml").is_file():
-        resolved_check = ["garden", "doctor", "--target", ".", "--skip-network"]
+        nursery_garden_py = catalog_path.resolve().parent / "garden.py"
+        if nursery_garden_py.is_file():
+            rel_garden_py = Path(os.path.relpath(nursery_garden_py, root)).as_posix()
+            resolved_check = [
+                "python3",
+                rel_garden_py,
+                "doctor",
+                "--target",
+                ".",
+                "--skip-network",
+            ]
+        else:
+            resolved_check = ["garden", "doctor", "--target", ".", "--skip-network"]
     else:
         raise ValueError(
             "pass --check <cmd>... or run 'garden init' in the target repository first"
