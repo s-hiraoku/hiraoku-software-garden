@@ -128,7 +128,7 @@ hiraoku-software-garden/
 │   └── interventions/              # 人の介入レコード（任意で Git 管理または Artifacts 保存）
 ├── docs/
 │   └── specs/
-│       └── <spec-id>.md            # 仕様書正本（Git 管理、main マージで承認）
+│       └── <spec-id>.md            # 仕様書原本（Git 管理、main マージで承認）
 └── .github/
     └── workflows/
         └── garden.yml              # トリガーを受けて garden CLI を呼ぶ薄いワークフロー
@@ -247,7 +247,7 @@ type = "report"
 kind = "auto"
 
 [flows.verify_and_fix]
-description = "検証に失敗した場合、委譲範囲内で修正と再検証を最大2回まで試み、全仕様の収穫条件を最終ゲートで確かめる"
+description = "検証に失敗した場合、委譲範囲内で修正と再検証を最大2回まで試み、全仕様の結実条件を最終ゲートで確かめる"
 scope = "all_specs"
 
 [[flows.verify_and_fix.steps]]
@@ -340,7 +340,7 @@ owner: "@s-hiraoku"
 
 ### 3.2 承認済み仕様・ガーデン定義の信頼の起点（Trust Anchor）
 
-AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.toml`）を書き換えて `status: approved` にしたり、必須ゲートや委譲制約を緩めたりする抜け道を塞ぐため、**仕様とガーデン定義の両方について、保護された承認ブランチ（既定 `main`）にマージ済みの Git オブジェクト**を信頼の起点（正本）とします。
+AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.toml`）を書き換えて `status: approved` にしたり、必須ゲートや委譲制約を緩めたりする抜け道を塞ぐため、**仕様とガーデン定義の両方について、保護された承認ブランチ（既定 `main`）にマージ済みの Git オブジェクト**を信頼の起点（原本）とします。
 
 **Preflight 照合手順**:
 1. 信頼できる承認ブランチ名（既定 `main`、または CLI・ワークフロー引数の `--approval-branch` で明示指定。**PR ブランチ側の `.garden/garden.toml` からは読まない**）を `refs/heads/<branch>` または `refs/remotes/origin/<branch>` として厳格解決し（`HEAD` 等の生 ref は拒否）、コミット SHA（`approval_commit`）を取得する。
@@ -361,7 +361,7 @@ AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.
 1. **禁止パスの機械的強制**: `agent` ステップの実行後、`guard.py` が `<target_commit>` を基準に `git diff --name-only --no-renames <target_commit>` および未追跡ファイルを走査し（詳細は §5.4）、`forbidden_paths`（`.garden/**`、`docs/specs/**` 等）や `allowed_paths` 外の変更が1つでもあれば、エージェントの成否にかかわらず違反として変更を破棄（または隔離ブランチを破棄）し `NEEDS_HUMAN`（`delegation_violation`）へ遷移します。
 2. **承認済みガーデン定義による評価と変更時ロック**:
    - 通常の PR 検証では、PR ブランチ側ではなく **`approval_branch` 側の `.garden/garden.toml`** を評価基準として採用します（PR 側で `[flows.*.steps]` から `gate` を外したり、`[flows.*.delegation]` や `[agents]` を書き換えても評価をすり抜けられません）。
-   - `.garden/garden.toml` または仕様ファイルに何らかの差分がある PR（`evaluation_criteria_changed == true`）では、差分一覧を実行記録に残したうえで、たとえ全チェックが `passed` でも `auto_merge` および自動収穫通知を機械的に禁止し、必ず `propose_pr`（人のレビュー必須）に落とします。
+   - `.garden/garden.toml` または仕様ファイルに何らかの差分がある PR（`evaluation_criteria_changed == true`）では、差分一覧を実行記録に残したうえで、たとえ全チェックが `passed` でも `auto_merge` および自動結実通知を機械的に禁止し、必ず `propose_pr`（人のレビュー必須）に落とします。
 
 ---
 
@@ -385,10 +385,10 @@ stateDiagram-v2
     RUNNING --> UNSATISFIED: failed かつ再試行上限到達 / on_fail=escalate
     RUNNING --> SATISFIED: 全必須ステップ・gate 合格
     ABORTED --> [*]: 報告出力（中断理由を記録）
-    INCONCLUSIVE --> [*]: 報告出力（自動反映・収穫を保留）
+    INCONCLUSIVE --> [*]: 報告出力（自動反映・結実通知を保留）
     UNSATISFIED --> [*]: 報告出力（原因と試行履歴を人へ渡す）
     NEEDS_HUMAN --> [*]: 報告出力（問い・違反内容・証拠を人へ渡す）
-    SATISFIED --> [*]: 報告出力（条件を満たせば自動反映または収穫通知）
+    SATISFIED --> [*]: 報告出力（条件を満たせば自動反映または結実通知）
 ```
 
 **ステップ実行ルール（`gate`・`run_on_demand`・再試行）**:
@@ -436,7 +436,7 @@ stateDiagram-v2
 
 - **受け入れ条件の評価対象スコープ（`flow.scope`）**:
   - `scope = "flow_checks"`（既定）: そのフローのステップ・`gate` で参照する `active` チェックの `covers` に含まれる条件 ID のみを評価対象とする（部分検証・定期回帰フロー向け）。評価対象外の条件は `not_evaluated` として記録し、`INCONCLUSIVE` の原因にしない。
-  - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。収穫通知（`kind = "harvest"`）および自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。
+  - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。結実通知（`kind = "harvest"`）および自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。
 - **受け入れ条件（`AC-*` / `INV-*`）単位の判定**（評価対象 ID ごと）:
   - 先行ステップの失敗・中断・人判断待ちによってフローが途中終了し、当該条件のチェックが実行されなかった場合 → `not_evaluated`（先行する `UNSATISFIED` / `ABORTED` / `NEEDS_HUMAN` を `INCONCLUSIVE` で上書きしない）
   - フローが完走したにもかかわらず、その ID を `covers` に含み実行された `active` チェックが 0 件 → `inconclusive`（未検証）
@@ -445,7 +445,7 @@ stateDiagram-v2
   - 紐づくすべての実行済みチェックが `passed` → `satisfied`
 - **フロー総合判定の優先順位**（複数事由が同時に成り立つ場合は上位を採用）:
   1. **`NEEDS_HUMAN`**: 仕様未承認、権限・禁止パス違反、履歴改変、`needs_spec_decision`、コスト・時間上限超過のいずれかが発生
-  2. **`INCONCLUSIVE`**: 上記がなく、1件でも必須ステップまたは評価対象の受け入れ条件が `inconclusive`（自動反映および収穫通知を機械的に禁止）
+  2. **`INCONCLUSIVE`**: 上記がなく、1件でも必須ステップまたは評価対象の受け入れ条件が `inconclusive`（自動反映および結実通知を機械的に禁止）
   3. **`UNSATISFIED`**: 上記がなく、1件でも `unsatisfied` / `failed` がある
   4. **`ABORTED`**: 上記がなく、`on_fail = "abort"` または `on_inconclusive = "abort"` により明示的に中断した
   5. **`SATISFIED`**: すべての必須ステップ・`gate`・評価対象の受け入れ条件が合格
