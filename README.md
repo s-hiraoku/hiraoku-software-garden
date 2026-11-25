@@ -177,7 +177,7 @@ PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) とナ
 - 非公開ナーサリーから再利用ワークフローを実行する場合は、呼び出し側で `secrets.nursery_token` を渡します。
 - `garden init` を Claude Code のプラグインやスラッシュコマンドから呼べるようにすることを検討しています。
 - pstack の自動インストーラーはまだ用意していません。`garden doctor` が [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスと上流参照先を案内します。
-- 実際の対象リポジトリへの導入（MVP-4: 1 号目の実対象リポジトリで設計書 §6 の 3 条件を実証）はまだ行っていません。
+- 1 号目の対象リポジトリ（HAB）での MVP-4 実証はローカル実行で完了済みです（[実証記録](docs/implementation/evidence/mvp4-hab/README.md)）。対象リポジトリ側の実 GitHub Actions での継続稼働はこれから整備します。
 
 ## 文書案内
 

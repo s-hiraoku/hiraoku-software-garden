@@ -1,0 +1,14 @@
+{
+  "ready": false,
+  "reason": "toolchain_mismatch",
+  "required": {
+    "node": "26.13.1",
+    "npm": "12.2.3"
+  },
+  "actual": {
+    "node": "22.23.5",
+    "node_path": "/opt/node22/bin/node",
+    "npm": "10.9.9"
+  },
+  "remedy": "Install the Node.js version in .node-version and the npm version in package.json packageManager (CI: actions/setup-node with node-version-file)."
+}

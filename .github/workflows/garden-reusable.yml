@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: "main"
+      node_version_file:
+        description: "Optional path (in the target checkout) to a Node.js version file such as .node-version; when set, Node.js is installed before checks run, and the npm version in package.json packageManager (npm@<version>) is installed too"
+        required: false
+        type: string
+        default: ""
     secrets:
       reflect_token:
         description: "Optional GitHub App token / PAT for Phase-6 reflect push, PR creation, and auto-merge (default GITHUB_TOKEN cannot trigger downstream required workflows on PRs it opens)"
@@ -107,6 +112,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Set up Node.js for target checks
+        if: inputs.node_version_file != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ${{ inputs.node_version_file }}
+
+      - name: Install pinned npm for target checks
+        if: inputs.node_version_file != ''
+        run: |
+          PM="$(node -p 'try { require("./package.json").packageManager || "" } catch { "" }')"
+          case "${PM}" in
+            npm@*) npm install --global "${PM}" ;;
+            *) echo "no npm packageManager pin; using bundled npm" ;;
+          esac
 
       - name: Run Garden flow
         id: garden_run

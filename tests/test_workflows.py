@@ -88,6 +88,16 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("          import json, pathlib, sys\n", text)
         self.assertIn("          PY\n", text)
 
+    def test_garden_reusable_workflow_can_set_up_node_for_target_checks(self):
+        text = (REPO_ROOT / ".github" / "workflows" / "garden-reusable.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("node_version_file:", text)
+        self.assertIn("uses: actions/setup-node@v4", text)
+        self.assertIn("node-version-file: ${{ inputs.node_version_file }}", text)
+        # Node setup must run before the Garden flow so target checks see the pinned toolchain
+        self.assertLess(text.index("actions/setup-node@v4"), text.index("- name: Run Garden flow"))
+
     def test_garden_dogfood_workflow_uses_trusted_origin_main_cli_and_reusable_smoke(self):
         text = (REPO_ROOT / ".github" / "workflows" / "garden-dogfood.yml").read_text(
             encoding="utf-8"
