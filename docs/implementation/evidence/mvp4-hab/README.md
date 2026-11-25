@@ -34,7 +34,20 @@ HAB 側のブランチ `claude/project-thread-xq4x92` に、`templates/cli/v1` �
 3. 再発防止として、`check-toolchain.mjs` が必要な版・実際の版・対処を `toolchain-diagnostic.json` に証拠として残すようにし、対象固有のハーネスを v2 にしました。
 4. 同じ環境不備で再実行すると、ガーデンが原因を証拠付きで報告しました。介入を `verified` に更新し、`garden metrics` で `verified_rate = 1.0` を確認しました。
 
-## まだ確かめていないこと
+## GitHub Actions 実稼働の確認（2026-11-25）
 
-- **GitHub Actions からの起動**: 今回はすべてローカル実行です。HAB の PR を起点に CI で動かすには、HAB の PR を `main` にマージして仕様を承認し、HAB（公開）からナーサリー（非公開）の再利用ワークフローを呼べるようにする必要があります。
-- **失敗した段階の特定**: HAB のデモは失敗時に JSON を出さないため、`UNSATISFIED` の要約からはどの段階で失敗したかまでは分かりません。次の介入の候補です。
+HAB 側の導入 PR（[s-hiraoku/hiraoku-agent-base#289](https://github.com/s-hiraoku/hiraoku-agent-base/pull/289)）を `main` にマージしたうえで、実際の GitHub Actions から `hiraoku-software-garden/.github/workflows/garden-reusable.yml@main` が稼働することを確認しました。
+
+| 起点 | 実行ログ | 結果 |
+| --- | --- | --- |
+| `pull_request`（[PR #291](https://github.com/s-hiraoku/hiraoku-agent-base/pull/291)） | [Run 45514998327](https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45514998327) | `success`（`verify_relay` 実行 → Run Artifacts 保存 → [harvest コメント自動投稿](https://github.com/s-hiraoku/hiraoku-agent-base/pull/291#issuecomment-7148093889)） |
+| `workflow_dispatch`（`main`） | [Run 45515424129](https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45515424129) | `success`（`verify_relay` 実行 → Run Artifacts 保存） |
+
+あわせて、ナーサリー自身でも `Garden Self-Dogfood / reusable-smoke`（[Run 45520869748](https://github.com/s-hiraoku/hiraoku-software-garden/actions/runs/45520869748/job/138892071427)）で `garden-reusable.yml` の実稼働を確認しました。
+
+※ 初回 PR #291 の実行で「対象リポジトリに未作成の `garden:harvest-ready` ラベルが自動付与されない」「PR コメントに Workflow Run URL が添えられていない」ことが見つかったため、ナーサリー側の `report.py`（ラベル自動作成＋既存ラベルのみの安全削除）と `artifacts.py`（`証拠 Artifacts` リンク自動記載）へ還元しました。
+
+## 今後の改善候補（Post-MVP）
+
+- **失敗した段階の特定**: HAB のデモは失敗時に JSON を出さないため、`UNSATISFIED` の要約からはどの段階で失敗したかまでは分かりません。次の工程⑦の介入候補です。
+- **委譲範囲の段階的拡大**: 現在は `observe_only` で運用しています。安定した後に `propose_pr`（実エージェント修正＋`garden reflect`）へ広げる予定です。
