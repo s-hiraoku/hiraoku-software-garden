@@ -34,7 +34,23 @@ HAB 側のブランチ `claude/project-thread-xq4x92` に、`templates/cli/v1` �
 3. 再発防止として、`check-toolchain.mjs` が必要な版・実際の版・対処を `toolchain-diagnostic.json` に証拠として残すようにし、対象固有のハーネスを v2 にしました。
 4. 同じ環境不備で再実行すると、ガーデンが原因を証拠付きで報告しました。介入を `verified` に更新し、`garden metrics` で `verified_rate = 1.0` を確認しました。
 
+## GitHub Actions での実行
+
+2026-11-25 に、ナーサリーを公開し、ナーサリー #17 と HAB #289 をマージしたうえで、HAB の `main` で `Garden Verify`（`garden.yml`）を手動実行しました。
+
+| 実行 | 起点 | 判定 |
+| --- | --- | --- |
+| [45515424129](https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45515424129) | `workflow_dispatch`（`main`、フロー `verify_relay`） | `SATISFIED`（判定の終了コード 0） |
+
+ジョブのログで確かめたこと:
+
+- 公開したナーサリーから CLI を認証なしで取得できた。
+- `node_version_file: .node-version` で Node 26.13.1 を準備し、`packageManager` の npm を入れた。
+- 実行記録をアーティファクト `garden-run-verify_relay-45515424129` として保存した。
+
+手動実行のため、PR へのコメントは投稿されていません（`issue_number` が 0）。
+
 ## まだ確かめていないこと
 
-- **GitHub Actions からの起動**: 今回はすべてローカル実行です。HAB の PR を起点に CI で動かすには、HAB の PR を `main` にマージして仕様を承認し、HAB（公開）からナーサリー（非公開）の再利用ワークフローを呼べるようにする必要があります。
+- **PR を起点にした実行と PR へのコメント**: 仕様を承認した後に、HAB で PR を作って確かめます。
 - **失敗した段階の特定**: HAB のデモは失敗時に JSON を出さないため、`UNSATISFIED` の要約からはどの段階で失敗したかまでは分かりません。次の介入の候補です。
