@@ -1,90 +1,115 @@
-# 用語集
+# 用語集（ユビキタス言語）
 
-人とエージェントがこのリポジトリについて話すときに、同じ言葉を同じ意味で使うための用語集です。hiraoku-software-garden が独自に定義する用語だけを載せます。外部の資料やツールで定義された用語は、区別できるよう末尾の「参考事例・外部ツール」に分けて載せます。定義はリポジトリ内の記述に沿っています。「使い分け・注意」列には、混同しやすい言葉と避けたい言い方を書いています。用語の意味を変えたり新しい用語を導入したりしたときは、この表も更新します。
+人・エージェント・設計書・コード・設定ファイルの間で同じ言葉を同じ意味で使うための**ユビキタス言語（共通語彙）**です。ここには hiraoku-software-garden 自身が使う用語だけを載せます。外部の参考事例や外部ツールの語彙は [外部参考用語集](docs/references/external-terms.md) に分けています。
 
-## 中心概念
+---
 
-このリポジトリは「ナーサリー」、対象リポジトリごとに生まれる育成環境は「ガーデン」と呼び分けます。「Garden」と「ガーデン」は同じ意味で、このリポジトリを指すことはありません。
+## 全体像（どこに何があるか）
 
-| 用語 | 定義 | 使い分け・注意 | 出典 |
-| --- | --- | --- | --- |
-| ナーサリー（Nursery） | このリポジトリ hiraoku-software-garden そのもの。苗を育てて送り出す苗圃のように、育て方のテンプレート、共通の開発手順、対象リポジトリの登録一覧とチェックの入口を置く。 | 対象リポジトリの育成環境（ガーデン）とは別物。Matt Pocock の Home Repo Pattern を土台にしているが、このリポジトリを「Home Repo」とは呼ばない。英字の「Garden」もこのリポジトリの呼び名には使わない。 | [README.md](README.md), [AGENTS.md](AGENTS.md) |
-| ガーデン（Garden） | ナーサリーのテンプレートを対象リポジトリの用途と仕様に合わせて適用したときに生まれる、そのソフトウェアの育成環境。対象リポジトリ一つにつきガーデン一つ。 | 「ガーデン」と「Garden」は同じ意味。「庭」は使わずガーデンに統一する。ナーサリー（このリポジトリ）と混ぜない。 | [docs/philosophy.md](docs/philosophy.md) |
-| 対象リポジトリ | ナーサリーに登録して育てる個々のプロダクトのリポジトリ。プロダクトコード、固有の仕様、対象固有のハーネスの実装と依存関係を持つ。 | 「プロジェクト」とは呼ばない。ガーデンは対象リポジトリに生まれる育成環境、対象リポジトリはその置き場。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| ソフトウェアガーデン | このプロジェクト全体の名前。ナーサリーと、そこから生まれた全ガーデンを合わせた取り組みを指す。 | 「このプロジェクト」と言うときはこの意味。個々の対象リポジトリを「プロジェクト」と呼ばない。 | [docs/philosophy.md](docs/philosophy.md) |
-| ソフトウェアファクトリー | 人が仕様を定め、ガーデンが実装と検証を繰り返し、人が完成を判断する、という開発の仕組み全体。ソフトウェアガーデンが目指す姿。 | 外部事例（Pocock、StrongDM など）の意味とは少しずつ異なる。外部の意味を指すときは「〇〇の言うソフトウェアファクトリー」と明示する。 | [README.md](README.md), [docs/philosophy.md](docs/philosophy.md) |
-| テンプレート（育て方） | 種類に合う手順、道具、設計上の制約の組み合わせとしてナーサリーに蓄える、繰り返し使える育て方の知識。共通の開発ハーネスも含む。 | 単なるファイル雛形ではなく検証観点・委譲既定値・推奨スキルを含む。`templates/{cli,web-frontend,http-api,library}/v1/` の4型を実装済み。 | [docs/philosophy.md](docs/philosophy.md), [詳細設計書](docs/implementation/detailed-design.md) |
-| ハーネス | エージェントが設計上の制約を守り、実装した挙動を自分で確かめられるようにする仕組み。 | 「共通の開発ハーネス」と「対象固有のハーネス」のどちらかを必ず明示する。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| 共通の開発ハーネス | 全対象リポジトリで使う開発の進め方。現在は pstack を採用。 | ナーサリー側の責務。「共通ハーネス」とは略さない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| 対象固有のハーネス | その製品をどう起動し、何を操作し、何をもって成功とするかを持つ仕組み。ライブラリ、ドライバー、テストデータ、再発防止チェックを含む。 | 対象リポジトリ側に置く。ナーサリーには置かない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| 育成 | トリガーを受けて AI が、人に任された範囲で実装と検証を繰り返すこと。 | 人の判断（完成・出荷）は含まない。 | [docs/philosophy.md](docs/philosophy.md) |
-| 収穫 | ガーデンが仕様を満たしたと判断し、成果物と検証結果を添えて人に知らせること。 | 「収穫を知らせる」のはガーデン、「完成を決める」のは人。収穫＝出荷ではない。 | [docs/philosophy.md](docs/philosophy.md) |
-| 完成・出荷の判断 | 「欲しかったものができた」と人が認め、出荷するか、さらに手を入れるかを決めること。 | AI には委ねない。 | [README.md](README.md), [docs/philosophy.md](docs/philosophy.md) |
-| 還元 | 一つのガーデンで得た知見のうち、他のガーデンでも役立つと確かめられたものを、有効な条件とともにナーサリーのテンプレートや手順に取り込むこと。 | 確かめる前の知見は還元しない。 | [README.md](README.md), [docs/philosophy.md](docs/philosophy.md) |
-| トリガー | 作業の依頼や変更の到着など、育成を始めるきっかけとなる出来事。 | 現時点のナーサリーには実装されていない（Phase 3 で扱う）。 | [docs/philosophy.md](docs/philosophy.md) |
+```mermaid
+flowchart LR
+    subgraph Nursery["ナーサリー (hiraoku-software-garden)"]
+        CAT["カタログ<br/>garden.toml"]
+        TPL["テンプレート<br/>templates/*/v*/"]
+        CH["共通の開発ハーネス<br/>harnesses/pstack.toml"]
+        CLI["garden CLI / 再利用ワークフロー"]
+    end
 
-## CLI とカタログ
+    subgraph Target["対象リポジトリ (例: HAB)"]
+        subgraph Garden["ガーデン (育成環境)"]
+            SPEC["承認済み仕様<br/>docs/specs/*.md"]
+            DEF["ガーデン定義<br/>.garden/garden.toml"]
+            TH["対象固有のハーネス<br/>テスト・検証スクリプト"]
+            RUNS["実行記録 / 介入レコード<br/>.garden/runs/, interventions/"]
+        end
+    end
 
-`garden.py`（および `garden` CLI）は、カタログ操作（`list`・`check`）に加えて、対象リポジトリの導入・診断・更新（`init`・`doctor`・`upgrade`）、フロー実行（`run`）、報告（`report`）、介入記録（`feedback`）を提供します。
+    TPL -->|"garden init / upgrade"| Garden
+    CLI -->|"garden run / doctor / report"| Garden
+    RUNS -.->|"有効な知見を還元"| TPL
+```
 
-| 用語 | 定義 | 使い分け・注意 | 出典 |
-| --- | --- | --- | --- |
-| カタログ（ナーサリー直下の `garden.toml`） | 対象リポジトリの登録一覧。`[repositories.<id>]` ごとに `path`、`remote`、`description`、`check` を持つ。 | 「登録一覧」と同義。現在は空。`--catalog` で別ファイルを指定できる。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| ガーデン定義（対象リポジトリの `.garden/garden.toml`） | そのガーデンで採用したテンプレート・共通の開発ハーネス・対象固有のハーネスの版、製品仕様の場所、委譲範囲、トリガーとフローを記す設定。 | ナーサリー直下のカタログ（`garden.toml`）と配置を分けて衝突を防ぐ。ローダーと厳格バリデーターは実装済み。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
-| ガーデン定義のフロー（`[flows.<名前>]`） | トリガーが名前を指定して起動する一連の手順。 | `check`・`agent`・`gate`・`report` の型付きステップと失敗時遷移を決定論的ステートマシンで実行する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md), [詳細設計書](docs/implementation/detailed-design.md) |
-| 実行記録（Run Artifacts） | フロー1回分の実行結果・版情報・ステップ別ログ・証拠・要約を `.garden/runs/<run-id>/` にまとめた構造化出力。 | ローカル実行と GitHub Actions Artifacts で同一レイアウトを使う。 | [詳細設計書](docs/implementation/detailed-design.md) |
-| 冪等キー | 対象リポジトリ・コミット・トリガー・フロー・承認済みガーデン定義および承認済み仕様の blob SHA から算出する識別子。 | 同じ事象の再送による重複実行を防ぐために使う。 | [詳細設計書](docs/implementation/detailed-design.md) |
-| 介入レコード | 人が手直しや切り分けを行った理由（分類コード）と再発防止チェックへの落とし込み状態を記録する構造化データ。 | 工程⑦の改善判断に使う（`garden feedback` で記録・集計）。 | [詳細設計書](docs/implementation/detailed-design.md) |
-| リポジトリ ID | カタログ上の安定した識別子（`<repo-id>`）。`check` の引数に渡す。 | リポジトリ名と一致していなくてもよい。 | [AGENTS.md](AGENTS.md) |
-| ワークスペース | カタログの `path` を解決する基準ディレクトリ。既定はナーサリーの親ディレクトリ（`--workspace`）。 | ナーサリーと対象リポジトリを同じ親に並べる前提。 | [garden.py](garden.py) |
-| チェック（登録済みチェック） | 対象リポジトリで既に使っている自動チェックのコマンド。カタログの `check` に引数の配列で登録し、作業ツリーのルートで実行する。 | 「検証」の一部だが同義ではない。チェックは終了コードで合否が決まるコマンド。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| `passed` | チェックコマンドが終了コード 0 で終わった。 | 仕様を満たしたことは意味しない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| `failed` | チェックコマンドが非ゼロで終了した。 | 原因は標準エラーのログで確認。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| `unavailable` | チェックを実行できなかった。チェックアウトがない、取得 URL が不一致、Git 情報を読めない、コマンドを起動できない、など。 | `failed` と区別する。「落ちた」と一括りにしない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| 取得 URL（`remote`） | `git remote get-url <remote-name>` が返す fetch 用 URL。いずれかのリモートと一致したときだけチェックを実行する。 | push 用 URL ではない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| `dirty` | チェック開始前に未コミットの変更や未追跡ファイルがあったか。 | `status.showUntrackedFiles=no` の設定でも未追跡ファイルを数える。 | [garden.py](garden.py), [test_garden.py](test_garden.py) |
+### まず覚える 6 語
 
-## 仕様と検証
+| 用語 | ひとことで言うと | 実体・具体例 |
+| --- | --- | --- |
+| **ナーサリー（Nursery）** | 育て方の知識と共通道具を置く拠点リポジトリ | このリポジトリ `hiraoku-software-garden` そのもの |
+| **対象リポジトリ** | 育てる個々のプロダクトのリポジトリ | 例: `s-hiraoku/hiraoku-agent-base`（HAB） |
+| **ガーデン（Garden）** | 対象リポジトリの中に作る育成環境（1 リポジトリにつき 1 つ） | 対象リポジトリの `.garden/`・`docs/specs/`・対象固有のハーネス・CI の総体 |
+| **仕様** | 「何ができ、何が起きてはいけないか」を人が定めた正本 | `docs/specs/*.md`（受け入れ条件 `AC-xxx` と不変条件 `INV-xxx`） |
+| **ハーネス** | エージェントが制約を守り、実挙動を自分で確かめる仕組み | **共通の開発ハーネス**（pstack）と**対象固有のハーネス**の 2 層 |
+| **収穫** | 全条件を満たしたとガーデンが判断し、証拠付きで人に知らせること | `SATISFIED` 時の `summary.md`（`harvest` 報告）。完成・出荷の最終判断は人が行う |
 
-「検証」は幅の広い言葉なので、何をどの前提で確かめたかを添えて使います。
+---
 
-| 用語 | 定義 | 使い分け・注意 | 出典 |
-| --- | --- | --- | --- |
-| 委譲範囲 | ある仕事について、人がガーデンに任せた対象・操作・反映の範囲。 | その範囲を広げるときは人が判断する。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
-| 運用担当者 | ガーデンを運用する人。使うトリガーを選び、どの仕事をガーデンに任せるかを設定し、フローや検証手順を組み替える。 | 製品の利用者とは別。仕様の承認や完成・出荷の判断は、それぞれの決定を担う人が行う。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
-| 仕様 | 誰のどんな願いをかなえるか、何ができ、何が起きてはいけないかを人が定めたもの。受け入れ条件と不変条件を含む。 | 人が最も力を注ぐ部分。AI が仕様を決められないときは人に問いを返す。 | [docs/philosophy.md](docs/philosophy.md) |
-| 受け入れ条件 | 実際の振る舞いで完成を判断できる条件。検証はここから組み立てる。 | 「完成の条件」「完了条件」とほぼ同義。AI が実装に合わせて作ったテストはこれに含めない。 | [docs/philosophy.md](docs/philosophy.md) |
-| 不変条件 | 常に守るべき性質。仕様に明示し、必要に応じて形式検証で確かめる。 | 「守るべき性質」と同義。人が定める。 | [docs/philosophy.md](docs/philosophy.md) |
-| 検証 | 仕様（受け入れ条件・不変条件）と実際の振る舞いを照らし合わせること。チェック、実行時の確認、形式検証を含む。 | 結果には、どの性質をどんな前提で確かめたかを残す。「テストが通った」だけで検証済みと言わない。 | [docs/philosophy.md](docs/philosophy.md) |
-| 再発防止チェック | 実際の失敗やレビュー指摘を、型、lint、テスト、API 設計に変えて、次は自動で防ぐか検出できるようにしたもの。 | 対象リポジトリに置く。過去の失敗を再現して検出できることを確かめる。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| 判定不能 | 必要な証拠が得られず、受け入れ条件を満たしたか判断できない状態。 | 必須チェックの `unavailable` は一例。チェックを実行できても観察結果が欠ければ判定不能になる。 | [ソフトウェアガーデン設計書](docs/implementation/design.md) |
-| 証拠 | 確認した条件、手順、結果、未確認の点。レビューや収穫の報告に添える。 | 「動作の証拠」「検証の根拠」も同じ意味。 | [docs/implementation/README.md](docs/implementation/README.md) |
+## 1. 基本構造と設定ファイル
 
-## 参考事例・外部ツール
+| 用語 | 意味 | 補足・対応する実体 |
+| --- | --- | --- |
+| **ソフトウェアガーデン** | ナーサリーと、そこから生まれた全ガーデンを合わせた取り組み全体 | プロジェクト全体を指す名前（[思想](docs/philosophy.md)） |
+| **ソフトウェアファクトリー** | 人が仕様を定め、ガーデンが実装・検証を繰り返し、人が完成を決める開発の仕組み全体 | ソフトウェアガーデンが目指す姿 |
+| **テンプレート（育て方）** | ソフトウェアの種類ごとの検証観点・委譲既定値・推奨スキル・雛形一式 | `templates/{cli,web-frontend,http-api,library}/v1/`（版ごとに不変） |
+| **共通の開発ハーネス** | 全対象リポジトリで共通して使う開発・検証スキル集 | 現在は `pstack` を採用（[harnesses/pstack.toml](harnesses/pstack.toml) で版を固定） |
+| **対象固有のハーネス** | その製品固有の起動・操作・成否判定・再発防止チェックの実装 | 対象リポジトリに置く（ナーサリーには置かない） |
+| **カタログ** | ナーサリーに登録した対象リポジトリの一覧と代表チェック | ナーサリー直下の [garden.toml](garden.toml)（`[repositories.<id>]`） |
+| **ガーデン定義** | 対象リポジトリ固有のテンプレート版・仕様パス・チェック・トリガー・フロー・委譲範囲の設定 | 対象リポジトリの `.garden/garden.toml`（カタログとは別物） |
+| **運用担当者** | ガーデンに任せる仕事・トリガー・フロー・委譲範囲を設定し保守する人 | 製品の利用者とは別。仕様承認や出荷判断はそれぞれの責任者が行う |
 
-ここに載せる用語は外部の資料やツールで定義されたもので、hiraoku-software-garden の用語ではありません。意味は出典の定義に従い、ここでは見分けやすいように要点とソフトウェアガーデンとの関係だけを書きます。ソフトウェアガーデンで採用したもの（現状は pstack のみ）と、参考にとどめているものを区別して使います。
+---
 
-| 用語 | 定義 | ソフトウェアガーデンとの関係 | 出典 |
-| --- | --- | --- | --- |
-| pstack | Lauren Tan が公開した開発スキル集。`/correct`、`/poteto-mode`、`create-verification-skill`、`maintain-verification-skill` などを含む。 | 採用済み。共通の開発ハーネス。配布やバージョン管理は未定。 | [docs/implementation/README.md](docs/implementation/README.md), [lauren-tan.md](docs/references/cases/lauren-tan.md) |
-| Home Repo Pattern | Matt Pocock が示した、複数リポジトリの作業を一つの拠点リポジトリから始めるやり方。 | ナーサリーの構成の土台。ただし、このリポジトリは Home Repo とは呼ばない。 | [docs/implementation/README.md](docs/implementation/README.md) |
-| ミシュランの厨房 | Lauren Tan の比喩。自動化より先に、コードベースの設計、型、lint、決定的なチェック、動作の検証を整える開発環境。 | 「品質ゲートを先に固める」というソフトウェアガーデンの優先順位の根拠。 | [lauren-tan.md](docs/references/cases/lauren-tan.md) |
-| 逆ピラミッド | Tan の優先順位。①コードベースと API の改善、②lint や型などの静的チェック、③文章のルールやスキル、④人間のレビュー。 | 参考。 | [software-factory-timeline.md](docs/references/software-factory-timeline.md), [lauren-tan.md](docs/references/cases/lauren-tan.md) |
-| Dune | Grok Bot チームが Electron アプリ向けに作った、設計制約や lint を組み込んだフレームワーク（例: `useEffect` の禁止）。 | 参考。制約を API や lint に組み込む実例。 | [lauren-tan.md](docs/references/cases/lauren-tan.md) |
-| タスク / run / ランナー / オーケストレーター | Pocock の `software-factory` スキルの語彙。繰り返す仕事、その一回分の実行、実行環境、トリガーを受けて仕事を割り振る役。 | 参考。ナーサリーにはまだ実装されていない。 | [matt-pocock-software-factory.md](docs/references/cases/matt-pocock-software-factory.md) |
-| Sandcastle | `sandcastle.run()` で分離されたサンドボックス上のエージェントに作業を渡す TypeScript ライブラリ（Pocock）。 | 参考。 | [matt-pocock-software-factory.md](docs/references/cases/matt-pocock-software-factory.md) |
-| Ralph Wiggum | エージェントが小さなタスクを選び、実装し、型チェックやテストで確かめ、コミットすることをループで繰り返す使い方。 | 参考。 | [software-factory-timeline.md](docs/references/software-factory-timeline.md) |
-| Dark Factory | 仕様を入力するとソフトウェアができあがる最終段階を自動運転になぞらえた Dan Shapiro の言葉。 | 参考。ソフトウェアガーデンは最後の判断を人に残す点で異なる。 | [software-factory-timeline.md](docs/references/software-factory-timeline.md) |
-| Harness Engineering | OpenAI の記事。エージェントがバグの再現、修正前後の記録、PR と CI の追跡までできる環境を整える考え方。 | 参考。 | [openai.md](docs/references/cases/openai.md) |
-| Symphony | イシュートラッカーを読み、チケットごとに作業環境を用意してエージェントに割り当てる OpenAI の公開仕様。`WORKFLOW.md` で設定する。 | 参考。 | [openai.md](docs/references/cases/openai.md) |
-| Attractor / `goal_gate` | StrongDM の公開仕様。Graphviz DOT で工程と遷移を定義し、`goal_gate` で重要工程の結果を終了時に確認する。 | 参考。 | [strongdm.md](docs/references/cases/strongdm.md) |
-| Factories-as-code（`factory.yaml`） | Warp の考え方。ワークフロー、スキル、MCP、モデル選択などをコードとしてバージョン管理する。 | 参考。`garden.toml` はそのごく一部（登録一覧）に当たる。 | [warp.md](docs/references/cases/warp.md) |
-| Spec Kit / `converge` | GitHub の仕様駆動開発ツール。仕様を計画、タスク、コードにつなげ、`converge` で実装と仕様の整合を確かめる。 | 参考。 | [specification.md](docs/references/methods/specification.md) |
-| DORA 指標 | 変更リードタイム、デプロイ頻度、復旧時間、変更失敗率、デプロイの手戻り率の五つ。 | 参考。将来の測定候補。 | [release-and-improvement.md](docs/references/methods/release-and-improvement.md) |
-| 自作自演のオールグリーン | AI が実装とテストの両方を作り、同じ思い違いが両方に入ったままテストが通ってしまう問題。 | 検証を人の仕様から組み立てる理由。 | [specification-and-formal-verification.md](docs/references/specification-and-formal-verification.md) |
-| 決定的なチェック（品質ゲート） | 型、lint、静的解析、テストのように、制約に違反すると毎回同じように失敗するチェック。 | 文書のルールや人のレビューより先に整える。「決定論的」とも書かれる。 | [software-factory-foundations.md](docs/references/software-factory-foundations.md) |
-| 形式検証 | モデル検査や定理証明で、定めた前提のもとで性質が常に成り立つことを確かめる手法。 | 実際のアプリがモデルどおり動くかは、別途テストや実行時の観測で確かめる。 | [formal-verification.md](docs/references/methods/formal-verification.md) |
-| TLA⁺ / TLC | 並行実行やイベントの順序が変わっても不変条件が守られるかを、有限モデルの状態探索で調べる仕様言語とモデル検査器。 | 対象はモデルであって実装ではない。 | [formal-verification.md](docs/references/methods/formal-verification.md) |
-| Quint | 状態遷移の仕様を書いてシミュレートし、不変条件が破れる実行を探す言語。Apalache で記号的モデル検査もできる。 | 反例の再現用シードが得られる。 | [formal-verification.md](docs/references/methods/formal-verification.md) |
-| Lean 4 | 関数やアルゴリズムが定義した前提のもとで性質を満たすことを証明する定理証明支援系。 | 証拠の範囲は命題の定義と仮定で決まる。 | [formal-verification.md](docs/references/methods/formal-verification.md) |
-| デプロイ / リリース / 運用中の検証 | PR や CI の後、配置・公開・運用の各段階で確かめること。 | 対象リポジトリの配布形態に合わせて設計する。 | [verification-lifecycle.md](docs/references/sources/all-code-is-slop/verification-lifecycle.md) |
+## 2. 仕様・実行・判定・改善（仕事の流れ順）
+
+| 用語 | 意味 | 補足・対応する実体 |
+| --- | --- | --- |
+| **トリガー** | ガーデンのフローを起動するきっかけ（PR・コメント・手動実行など） | `.garden/garden.toml` の `[[triggers]]`（`garden run auto` で解決） |
+| **受け入れ条件** | 実際の振る舞いで完成を判断できる条件 | 仕様書内の `AC-xxx`。AI が実装に合わせて作ったテストは含めない |
+| **不変条件** | 常に守るべき性質 | 仕様書内の `INV-xxx`。必要に応じて形式検証で確かめる |
+| **承認ブランチ（Trust Anchor）** | 評価基準となる仕様とガーデン定義の正本を置く信頼済みブランチ | 既定は `main`（CLI/CI の `--approval-branch` で指定）。作業ブランチでの基準改ざんを検知する |
+| **フロー** | トリガーから名前で呼び出す一連の手順 | `[flows.<名前>]`（`check` / `agent` / `gate` / `report` ステップをステートマシンで実行） |
+| **チェック** | 終了コードで合否が決まる自動コマンド | `[checks.<名前>]`（`kind = "check"` または `kind = "formal_check"`）。「検証」の一部 |
+| **形式検証** | モデル検査・有界全状態探索・定理証明で、定めた前提のもと性質が常に成り立つかを確かめる手法 | `kind = "formal_check"`（`formal.json` を証拠として要求）。実挙動は実行時検証と併用 |
+| **検証** | 仕様（受け入れ条件・不変条件）と実際の振る舞いを照らし合わせること | チェック・実行時観察・形式検証を含む。「テスト通過」だけで検証済みと言わない |
+| **証拠** | 確認した条件・手順・結果・未確認の点を示す記録 | 各ステップのログ、テスト生成物、`formal.json`、`summary.md` |
+| **総合判定（5 種）** | フロー実行の最終判定と CLI 終了コード | `SATISFIED` (`0`: 充足) / `UNSATISFIED` (`1`: 挙動不一致) / `INCONCLUSIVE` (`3`: **判定不能**＝環境不備や証拠欠損) / `NEEDS_HUMAN` (`4`: 人判断待ち) / `ABORTED` (`5`: 明示中断) |
+| **委譲範囲・委譲モード** | ガーデンに任せる編集パス・上限・反映権限の範囲 | 3 段階: `observe_only`（観測のみ）/ `propose_pr`（PR 提案まで）/ `auto_merge`（条件付き自動マージ） |
+| **事後ガード** | エージェント実行後に禁止パス改変・履歴書き換え・コスト/時間上限を検査する安全装置 | `src/garden/guard.py`（違反時は `NEEDS_HUMAN`） |
+| **反映ゲート** | 検証済み変更（`verified_commit`）の PR 作成・自動マージ可否を決める決定論的ゲート | `garden reflect`（`--base` 祖先照合・ガード通過ファイル差分照合、既定ドライラン） |
+| **育成** | トリガーを受けて AI が委譲範囲内で実装と検証を繰り返すこと | 人の完成・出荷判断は含まない |
+| **完成・出荷の判断** | 「欲しかったものができた」と人が認め、出荷するか追加対応するかを決めること | AI には委ねない |
+| **実行記録（Run Artifacts）** | 1 回のフロー実行の版情報・判定・ステップ結果・証拠・要約のまとまり | `.garden/runs/<run-id>/`（`run.json`, `summary.md`, `steps/`）および CI Artifacts |
+| **冪等キー** | 対象・コミット・トリガー・フロー・承認済み定義/仕様の blob SHA から算出する識別子 | 同一条件の `SATISFIED` 再送による重複実行をスキップする |
+| **介入レコード** | 人の手直し理由（5 分類）と再発防止策の検証状態を記録する構造化データ | `.garden/interventions/<id>.json`（`garden feedback`・`garden metrics` で記録・集計） |
+| **再発防止チェック** | 失敗やレビュー指摘を型・lint・テスト・ハーネスに落とし込み、再発を自動検出できるようにしたもの | 対象リポジトリに置き、過去の失敗再現で効くことを確かめる |
+| **還元** | あるガーデンで効果と適用条件を確かめた知見を、ナーサリーのテンプレートや共通手順へ取り込むこと | 未検証の知見は還元しない |
+
+---
+
+## 3. カタログ CLI の補足用語（`list` / `check` / `register` / `status`）
+
+| 用語 | 意味 |
+| --- | --- |
+| **リポジトリ ID** | カタログ（`garden.toml`）上の安定した識別子（`<repo-id>`）。リポジトリ名と異なってもよい |
+| **ワークスペース** | カタログの相対 `path` を解決する基準ディレクトリ（`--workspace`、既定はナーサリーの親ディレクトリ） |
+| **取得 URL（`remote`）** | `git remote get-url <remote-name>` が返す fetch 用 URL。一致するリモートがある場合のみ `garden check` を実行する |
+| **`passed` / `failed` / `unavailable`** | `garden check` の個別結果。`passed`＝終了コード 0（仕様充足とは別）、`failed`＝非ゼロ終了、`unavailable`＝実行不可（URL 不一致・未チェックアウト・起動不能等） |
+| **`dirty`** | チェック開始前に未コミット変更または未追跡ファイルがある状態（`status.showUntrackedFiles=no` でも検出） |
+
+---
+
+## 4. 言い換え・避ける表現（早見表）
+
+会話・ドキュメント・プロンプト・PR では、混同を防ぐため次の表記を統一します。
+
+| 避ける言い方 | 代わりに使う言い方 | 理由 |
+| --- | --- | --- |
+| このリポジトリを「Garden」「Home Repo」と呼ぶ | **ナーサリー** | 対象リポジトリ側の「ガーデン」と混ざるため |
+| 「庭」 | **ガーデン**（または `Garden`） | 表記ゆれを防ぐため |
+| 対象リポジトリを「プロジェクト」と呼ぶ | **対象リポジトリ** | 「プロジェクト」はソフトウェアガーデン全体を指すため |
+| 「共通ハーネス」「ハーネス」（単体） | **共通の開発ハーネス** / **対象固有のハーネス** | ナーサリー責務か対象リポジトリ責務かを常に明示するため |
+| 「テストが通った＝検証済み」 | 確認した条件と前提を添えて**検証**と書く | チェック通過は仕様充足の一部でしかないため |
+| 「収穫＝出荷」「`unavailable`＝落ちた」 | **収穫**と**完成・出荷の判断**、`failed` と `unavailable` を分ける | 人とガーデンの責務、挙動不一致と環境不備を区別するため |
+| 外部事例の意味で単に「ソフトウェアファクトリー」 | 「〇〇の言うソフトウェアファクトリー」 | 外部事例（StrongDM 等）と本プロジェクトの定義が異なるため |
+
+---
+
+[プロジェクト概要](README.md) · [ソフトウェアガーデンの思想](docs/philosophy.md) · [設計書](docs/implementation/design.md) · [詳細設計書](docs/implementation/detailed-design.md) · [外部参考用語集](docs/references/external-terms.md)
