@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "run_id": "20261123T114237Z-a72b7edf",
+  "idempotency_key": "a72b7edf2c6c6717",
+  "trigger": {
+    "event": "manual",
+    "id": "manual",
+    "ref": "c198af73d6e866fb6dabbb312d93fe5a5964a992",
+    "issue_or_pr": null
+  },
+  "target": {
+    "remote": "/home/user/hiraoku-agent-base",
+    "commit": "c198af73d6e866fb6dabbb312d93fe5a5964a992",
+    "dirty": false,
+    "evaluation_criteria_changed": false,
+    "evaluation_change_reasons": []
+  },
+  "versions": {
+    "cli": "0.1.0",
+    "template": {
+      "name": "cli",
+      "version": 1
+    },
+    "common_harness": {
+      "name": "pstack",
+      "ref": "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
+    },
+    "target_harness": {
+      "name": "hab-message-relay-harness",
+      "version": 2
+    },
+    "approved_definition_blob_sha": "f6474b60bddf1ebffedbbe0ebb83cdfb3cd7bb86",
+    "head_definition_blob_sha": "f6474b60bddf1ebffedbbe0ebb83cdfb3cd7bb86",
+    "specs": [
+      {
+        "spec_id": "message-relay",
+        "path": "docs/specs/message-relay.md",
+        "version": 1,
+        "approval_branch": "main",
+        "approval_commit": "c198af73d6e866fb6dabbb312d93fe5a5964a992",
+        "blob_sha": "15c5538a4709dbc818950d2d7d3bda0d9d577d67",
+        "modified_in_head": false
+      }
+    ]
+  },
+  "flow": "verify_relay",
+  "flow_scope": "all_specs",
+  "effective_delegation": {
+    "mode": "observe_only",
+    "max_retries": 0,
+    "max_duration_sec": 600,
+    "max_cost_usd": 0.0
+  },
+  "worktree_branch": null,
+  "verified_commit": null,
+  "agent_changed_files": [],
+  "started_at": "2026-11-23T11:42:37Z",
+  "finished_at": "2026-11-23T11:42:38Z",
+  "duration_sec": 0.475,
+  "retries_used": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0
+  },
+  "verdict": "INCONCLUSIVE",
+  "criteria_results": {
+    "AC-001": {
+      "verdict": "inconclusive",
+      "checks": [
+        "toolchain"
+      ],
+      "note": "exited with inconclusive code 75"
+    },
+    "AC-002": {
+      "verdict": "not_evaluated",
+      "checks": [],
+      "note": "not executed because an earlier step halted the flow"
+    },
+    "INV-001": {
+      "verdict": "not_evaluated",
+      "checks": [],
+      "note": "not executed because an earlier step halted the flow"
+    },
+    "INV-002": {
+      "verdict": "not_evaluated",
+      "checks": [],
+      "note": "not executed because an earlier step halted the flow"
+    }
+  },
+  "escalation": {
+    "kind": "escalation",
+    "reason": "exit_code_inconclusive",
+    "detail": "exited with inconclusive code 75"
+  },
+  "steps": [
+    "steps/01-check_toolchain/step.json"
+  ]
+}
