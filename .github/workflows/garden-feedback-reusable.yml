@@ -31,6 +31,9 @@ on:
       feedback_token:
         description: "Optional GitHub App token / PAT for pushing and opening the persistence PR when open_pr is true"
         required: false
+      nursery_token:
+        description: "Optional read token for fetching a private Nursery repository"
+        required: false
 
 jobs:
   record-feedback:
@@ -60,11 +63,21 @@ jobs:
       - name: Clone Nursery CLI outside target checkout
         env:
           NURSERY_REF: ${{ inputs.nursery_ref }}
+          NURSERY_TOKEN: ${{ secrets.nursery_token }}
         run: |
-          rm -rf "${RUNNER_TEMP}/garden-nursery"
-          git clone --depth 1 --branch "${NURSERY_REF}" \
-            https://github.com/s-hiraoku/hiraoku-software-garden.git \
-            "${RUNNER_TEMP}/garden-nursery"
+          NURSERY_DIR="${RUNNER_TEMP}/garden-nursery"
+          rm -rf "${NURSERY_DIR}"
+          mkdir -p "${NURSERY_DIR}"
+          git -C "${NURSERY_DIR}" init -q
+          if [ -n "${NURSERY_TOKEN}" ]; then
+            AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${NURSERY_TOKEN}" | base64 | tr -d '\n')"
+            git -C "${NURSERY_DIR}" -c "http.https://github.com/.extraheader=${AUTH_HEADER}" \
+              fetch --depth 1 https://github.com/s-hiraoku/hiraoku-software-garden.git "${NURSERY_REF}"
+          else
+            git -C "${NURSERY_DIR}" fetch --depth 1 \
+              https://github.com/s-hiraoku/hiraoku-software-garden.git "${NURSERY_REF}"
+          fi
+          git -C "${NURSERY_DIR}" checkout -q FETCH_HEAD
 
       - name: Set up Python
         uses: actions/setup-python@v5

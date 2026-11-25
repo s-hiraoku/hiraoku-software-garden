@@ -50,6 +50,8 @@ alias garden='uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garde
 
 ```sh
 garden init --target path/to/your-repo
+# タグやコミット SHA でナーサリーの版を固定する場合:
+garden init --target path/to/your-repo --nursery-ref v0.1.0
 ```
 
 生成されるファイルは次のとおりです。既存のファイルは `--force` を付けない限り上書きしません。
@@ -106,6 +108,7 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 | --- | --- |
 | PR の作成・更新 | `auto`（`.garden/garden.toml` の `[[triggers]]` から解決。初期雛形は `verify_only`） |
 | Issue / PR に `/garden resume` とコメント | `verify_only`（PR の場合は `refs/pull/<番号>/head` をチェックアウトして実行） |
+| Issue / PR に `/garden feedback <分類> <内容>` とコメント | [garden-feedback-reusable.yml](.github/workflows/garden-feedback-reusable.yml) で介入レコードを記録（`open_pr: true` で PR 永続化も可能） |
 | 手動実行（workflow_dispatch） | 入力で指定したフロー |
 
 判定が `SATISFIED` 以外のときはジョブが失敗します。承認ブランチを保護し、このジョブを必須のチェックにすると、確かめられていない変更をマージできなくなります。
@@ -123,8 +126,10 @@ check = ["python3", "-m", "unittest"]
 ```
 
 ```sh
+python3 garden.py register path/to/my-cli --description "メッセージ送受信を確認する CLI"
 python3 garden.py list
 python3 garden.py check my-cli
+python3 garden.py status --skip-network
 ```
 
 詳しくは[ナーサリーの設計と使い方](docs/implementation/README.md#リポジトリを追加する)を参照してください。
@@ -133,15 +138,20 @@ python3 garden.py check my-cli
 
 | コマンド | 用途 |
 | --- | --- |
+| `garden register <target> [--id ID] [--check CMD...]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録する |
+| `garden status [--no-self] [--skip-network] [--json]` | ナーサリー自身と登録済み全ガーデンの健全性・直近判定を横断表示する |
 | `garden upgrade --target <path> [--to <版>] [--apply]` | テンプレートの新しい版との差分を示し、`--apply` で独自の設定を保ったまま更新する |
-| `garden feedback add --target <path> --run-id <id> --category <分類> --summary <内容>` | 人が介入した内容を記録する |
-| `garden feedback summary --target <path>` | 記録した介入を集計する |
+| `garden spec-diff --target <path> [--base main] [--head REF]` | 承認済み仕様との条件単位差分と影響チェック・フローを解析する |
+| `garden template-gate [--type TYPE \| --all] [--output PATH]` | テンプレート公開ゲートを実行し `release-evidence.json` を生成する |
+| `garden reflect <run-dir> [--base main] [--execute]` | 工程⑥の反映ゲートを評価する（既定はドライラン） |
+| `garden feedback add\|from-comment\|update\|summary --target <path>` | 人の介入レコードの記録・状態更新・集計を行う |
+| `garden metrics --target <path> [--limit N]` | 実行記録と介入レコードから判定率・再発条件・介入解消率を集計する |
 
 全サブコマンドの仕様は[詳細設計書の CLI リファレンス](docs/implementation/detailed-design.md#8-cli-リファレンスgarden-サブコマンド一覧)にあります。
 
 ## ナーサリー自体を開発する
 
-ナーサリーを変更するときや、カタログを使うときはクローンします。`python3 garden.py` で直接実行するか、仮想環境（`venv` など）内で編集可能モードでインストールして `garden` コマンドとして使います。
+ナーサリーを変更するときや、カタログを使うときはクローンします。`python3 garden.py`（または `python3 -m garden`）で直接実行するか、仮想環境（`venv` など）内で編集可能モードでインストールして `garden` コマンドとして使います。
 
 ```sh
 git clone https://github.com/s-hiraoku/hiraoku-software-garden.git
@@ -159,15 +169,15 @@ python3 -m unittest discover -s tests -v
 python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
 ```
 
-PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) が同じテストを実行します。
+PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) とナーサリー自身のドッグフーディング（[Garden Self-Dogfood](.github/workflows/garden-dogfood.yml)）が実行されます。
 
 ## 現在の制約と今後決めること
 
-- 版を固定する方法はまだありません。上の1行も、対象リポジトリのワークフローも、ナーサリーの `main` を直接参照しています。タグを打って `git+https://...@v0.1.0` や `garden-reusable.yml@v0.1.0` のように版を指定できるようにする予定です。
+- ナーサリーの初回リリースタグ（例: `v0.1.0`）の運用開始はこれからです。`garden init --nursery-ref <tag-or-sha>` と再利用ワークフローの `nursery_ref` はブランチ・タグ・コミット SHA のいずれにも固定できる実装になっています。
+- 非公開ナーサリーから再利用ワークフローを実行する場合は、呼び出し側で `secrets.nursery_token` を渡します。
 - `garden init` を Claude Code のプラグインやスラッシュコマンドから呼べるようにすることを検討しています。
-- pstack の導入手順はまだ用意していません。`garden doctor` は [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスに pstack があるかを確認するだけです。
-- ナーサリーを非公開にする場合、対象リポジトリの GitHub Actions からナーサリーを読み取る権限の設定が必要です。
-- 実際の対象リポジトリへの導入（MVP-4）と、実 GitHub Actions 環境での `garden-reusable.yml` の実稼働確認はまだ行っていません。
+- pstack の自動インストーラーはまだ用意していません。`garden doctor` が [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスと上流参照先を案内します。
+- 実際の対象リポジトリへの導入（MVP-4: 1 号目の実対象リポジトリで設計書 §6 の 3 条件を実証）はまだ行っていません。
 
 ## 文書案内
 

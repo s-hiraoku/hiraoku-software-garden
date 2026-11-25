@@ -70,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd.add_argument("--target", type=Path, default=Path.cwd())
     init_cmd.add_argument("--type", dest="template_type", default=None)
     init_cmd.add_argument("--version", type=int, default=None)
+    init_cmd.add_argument(
+        "--nursery-ref",
+        default="main",
+        help="Nursery Git ref (branch, tag, or commit SHA) to pin in generated workflow",
+    )
     init_cmd.add_argument("--force", action="store_true")
 
     doc_cmd = commands.add_parser("doctor", help="diagnose a target repository Garden setup")
@@ -240,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.target,
                 template_type=args.template_type,
                 version=args.version,
+                nursery_ref=args.nursery_ref,
                 force=args.force,
             )
         except (OSError, ValueError) as error:

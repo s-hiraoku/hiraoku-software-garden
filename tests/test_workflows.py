@@ -78,6 +78,8 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("reflect:", text)
         self.assertIn("base_branch:", text)
         self.assertIn("reflect_token:", text)
+        self.assertIn("nursery_token:", text)
+        self.assertIn("fetch --depth 1", text)
         self.assertIn("if: success() && inputs.reflect", text)
         # Concurrency must be scoped under jobs.run-garden (not top-level)
         self.assertNotIn("\nconcurrency:\n", text)
@@ -86,12 +88,13 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("          import json, pathlib, sys\n", text)
         self.assertIn("          PY\n", text)
 
-    def test_garden_dogfood_workflow_uses_trusted_origin_main_cli(self):
+    def test_garden_dogfood_workflow_uses_trusted_origin_main_cli_and_reusable_smoke(self):
         text = (REPO_ROOT / ".github" / "workflows" / "garden-dogfood.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("git archive origin/main", text)
         self.assertIn("TRUSTED_CLI", text)
+        self.assertIn("uses: ./.github/workflows/garden-reusable.yml", text)
 
     def test_garden_feedback_reusable_workflow_enforces_authorization_and_body_file(self):
         text = (
@@ -102,6 +105,15 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("--body-file", text)
         self.assertIn("open_pr:", text)
         self.assertIn("feedback_token:", text)
+        self.assertIn("nursery_token:", text)
+        self.assertIn("fetch --depth 1", text)
         self.assertIn("ref: ${{ inputs.base_branch }}", text)
         self.assertNotIn("\nconcurrency:\n", text)
         self.assertIn("\n    concurrency:\n", text)
+
+    def test_template_workflows_support_nursery_ref_pinning_and_feedback_job(self):
+        for tmpl in sorted((REPO_ROOT / "templates").glob("*/*/workflow.yml.tmpl")):
+            text = tmpl.read_text(encoding="utf-8")
+            self.assertIn("garden-reusable.yml@__NURSERY_REF__", text, str(tmpl))
+            self.assertIn("garden-feedback-reusable.yml@__NURSERY_REF__", text, str(tmpl))
+            self.assertIn("startsWith(github.event.comment.body, '/garden feedback')", text, str(tmpl))

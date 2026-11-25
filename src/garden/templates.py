@@ -15,6 +15,7 @@ from garden.spec import SpecError, parse_spec_markdown
 
 
 VERSION_DIR_RE = re.compile(r"^v(\d+)$")
+NURSERY_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 TEMPLATE_VERSION_LINE_RE = re.compile(
     r"(?ms)(^\[template\]\s*\n(?:[^\[]*?))^(version\s*=\s*)(\d+)(\s*)$"
 )
@@ -171,8 +172,11 @@ def init_garden(
     template_type: str | None = None,
     version: int | None = None,
     force: bool = False,
+    nursery_ref: str = "main",
     nursery_root: Path | None = None,
 ) -> dict[str, Any]:
+    if not NURSERY_REF_RE.match(nursery_ref) or ".." in nursery_ref:
+        raise ValueError(f"invalid nursery_ref {nursery_ref!r}")
     n_root = nursery_root or default_nursery_root()
     target = target_root.resolve()
     if not target.is_dir():
@@ -224,7 +228,9 @@ def init_garden(
         ),
         (
             target / ".github" / "workflows" / "garden.yml",
-            (tdir / "workflow.yml.tmpl").read_text(encoding="utf-8"),
+            (tdir / "workflow.yml.tmpl")
+            .read_text(encoding="utf-8")
+            .replace("__NURSERY_REF__", nursery_ref),
         ),
     ]
 
@@ -245,6 +251,7 @@ def init_garden(
         "target": str(target),
         "template": template_type,
         "version": version,
+        "nursery_ref": nursery_ref,
         "detection_reasons": list(detected_reasons),
         "created_files": created,
     }
