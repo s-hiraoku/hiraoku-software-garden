@@ -273,10 +273,32 @@ check = "operator_custom"
             (repo / "README.md").write_text("# pinned-cli\n", encoding="utf-8")
             commit_all(repo, "base")
 
-            bad = run_cli(
-                "init", "--target", str(repo), "--type", "cli", "--nursery-ref", "../bad"
-            )
-            self.assertEqual(bad.returncode, 2)
+            for invalid_ref in (
+                "../bad",
+                "release//stable",
+                "release/",
+                "v1.lock",
+                "release/.hidden",
+                "v1.",
+            ):
+                bad = run_cli(
+                    "init",
+                    "--target",
+                    str(repo),
+                    "--type",
+                    "cli",
+                    "--nursery-ref",
+                    invalid_ref,
+                )
+                self.assertEqual(bad.returncode, 2, f"expected exit 2 for {invalid_ref!r}")
+                self.assertFalse(
+                    (repo / ".garden").exists(),
+                    f"init should not create .garden for invalid ref {invalid_ref!r}",
+                )
+                self.assertFalse(
+                    (repo / ".github").exists(),
+                    f"init should not create .github for invalid ref {invalid_ref!r}",
+                )
 
             ok = run_cli(
                 "init", "--target", str(repo), "--type", "cli", "--nursery-ref", "v0.1.0"

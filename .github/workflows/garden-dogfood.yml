@@ -81,6 +81,8 @@ jobs:
         run: exit "${{ steps.dogfood_run.outputs.exit_code }}"
 
   reusable-smoke:
+    # Note: if this Nursery repository is ever made private, add
+    # `permissions: { contents: read }` and `secrets: { nursery_token: ${{ secrets.GITHUB_TOKEN }} }`.
     uses: ./.github/workflows/garden-reusable.yml
     with:
       flow: verify_all

@@ -21,6 +21,27 @@ TEMPLATE_VERSION_LINE_RE = re.compile(
 )
 
 
+def _validate_nursery_ref(nursery_ref: str) -> None:
+    """Validate nursery_ref against git check-ref-format rules (branches, tags, or commit SHAs)."""
+    if (
+        not NURSERY_REF_RE.match(nursery_ref)
+        or ".." in nursery_ref
+        or "//" in nursery_ref
+        or "@{" in nursery_ref
+        or nursery_ref.endswith("/")
+        or nursery_ref.endswith(".")
+    ):
+        raise ValueError(f"invalid nursery_ref {nursery_ref!r}")
+    for segment in nursery_ref.split("/"):
+        if (
+            not segment
+            or segment.startswith(".")
+            or segment.endswith(".")
+            or segment.endswith(".lock")
+        ):
+            raise ValueError(f"invalid nursery_ref {nursery_ref!r}")
+
+
 @dataclass(frozen=True)
 class DetectionMatch:
     template_name: str
@@ -175,8 +196,7 @@ def init_garden(
     nursery_ref: str = "main",
     nursery_root: Path | None = None,
 ) -> dict[str, Any]:
-    if not NURSERY_REF_RE.match(nursery_ref) or ".." in nursery_ref:
-        raise ValueError(f"invalid nursery_ref {nursery_ref!r}")
+    _validate_nursery_ref(nursery_ref)
     n_root = nursery_root or default_nursery_root()
     target = target_root.resolve()
     if not target.is_dir():

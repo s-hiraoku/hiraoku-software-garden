@@ -108,7 +108,7 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 | --- | --- |
 | PR の作成・更新 | `auto`（`.garden/garden.toml` の `[[triggers]]` から解決。初期雛形は `verify_only`） |
 | Issue / PR に `/garden resume` とコメント | `verify_only`（PR の場合は `refs/pull/<番号>/head` をチェックアウトして実行） |
-| Issue / PR に `/garden feedback <分類> <内容>` とコメント | [garden-feedback-reusable.yml](.github/workflows/garden-feedback-reusable.yml) で介入レコードを記録（`open_pr: true` で PR 永続化も可能） |
+| Issue / PR に `/garden feedback <分類> <内容> --run-id <実行ID>` とコメント | [garden-feedback-reusable.yml](.github/workflows/garden-feedback-reusable.yml) で介入レコードを記録（`open_pr: true` で PR 永続化も可能） |
 | 手動実行（workflow_dispatch） | 入力で指定したフロー |
 
 判定が `SATISFIED` 以外のときはジョブが失敗します。承認ブランチを保護し、このジョブを必須のチェックにすると、確かめられていない変更をマージできなくなります。
@@ -174,7 +174,7 @@ PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) とナ
 ## 現在の制約と今後決めること
 
 - ナーサリーの初回リリースタグ（例: `v0.1.0`）の運用開始はこれからです。`garden init --nursery-ref <tag-or-sha>` と再利用ワークフローの `nursery_ref` はブランチ・タグ・コミット SHA のいずれにも固定できる実装になっています。
-- 非公開ナーサリーから再利用ワークフローを実行する場合は、呼び出し側で `secrets.nursery_token` を渡します。
+- 非公開ナーサリーから別の非公開リポジトリの再利用ワークフローを実行する場合は、ナーサリー側の Settings → Actions → General → Access でアクセスを許可し、呼び出し側で Contents 読み取り権限のあるトークンを `secrets.nursery_token` として渡します（ナーサリー自身のワークフローでは `secrets.GITHUB_TOKEN` で足ります）。
 - `garden init` を Claude Code のプラグインやスラッシュコマンドから呼べるようにすることを検討しています。
 - pstack の自動インストーラーはまだ用意していません。`garden doctor` が [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスと上流参照先を案内します。
 - 1 号目の対象リポジトリ（HAB）での MVP-4 実証はローカル実行で完了済みです（[実証記録](docs/implementation/evidence/mvp4-hab/README.md)）。対象リポジトリ側の実 GitHub Actions での継続稼働はこれから整備します。
