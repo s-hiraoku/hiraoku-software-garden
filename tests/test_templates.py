@@ -266,3 +266,51 @@ check = "operator_custom"
                     )
                     self.assertEqual(fail_proc.returncode, 1)
                     self.assertEqual(json.loads(fail_proc.stdout)["verdict"], "UNSATISFIED")
+
+    def test_init_supports_nursery_ref_version_pinning_and_rejects_invalid_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_target_repo(Path(tmp) / "pinned-cli")
+            (repo / "README.md").write_text("# pinned-cli\n", encoding="utf-8")
+            commit_all(repo, "base")
+
+            for invalid_ref in (
+                "../bad",
+                "release//stable",
+                "release/",
+                "v1.lock",
+                "release/.hidden",
+                "v1.",
+            ):
+                bad = run_cli(
+                    "init",
+                    "--target",
+                    str(repo),
+                    "--type",
+                    "cli",
+                    "--nursery-ref",
+                    invalid_ref,
+                )
+                self.assertEqual(bad.returncode, 2, f"expected exit 2 for {invalid_ref!r}")
+                self.assertFalse(
+                    (repo / ".garden").exists(),
+                    f"init should not create .garden for invalid ref {invalid_ref!r}",
+                )
+                self.assertFalse(
+                    (repo / ".github").exists(),
+                    f"init should not create .github for invalid ref {invalid_ref!r}",
+                )
+
+            ok = run_cli(
+                "init", "--target", str(repo), "--type", "cli", "--nursery-ref", "v0.1.0"
+            )
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            out = json.loads(ok.stdout)
+            self.assertEqual(out["nursery_ref"], "v0.1.0")
+
+            wf_text = (repo / ".github" / "workflows" / "garden.yml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("garden-reusable.yml@v0.1.0", wf_text)
+            self.assertIn("garden-feedback-reusable.yml@v0.1.0", wf_text)
+            self.assertIn('nursery_ref: "v0.1.0"', wf_text)
+            self.assertNotIn("__NURSERY_REF__", wf_text)

@@ -6,6 +6,7 @@ on:
       - ".garden/**"
       - "docs/specs/**"
       - ".github/workflows/garden-dogfood.yml"
+      - ".github/workflows/garden-reusable.yml"
       - ".agents/skills/formal-verify-garden-engine/**"
   push:
     branches: [main]
@@ -78,3 +79,12 @@ jobs:
       - name: Enforce verdict exit code
         if: always()
         run: exit "${{ steps.dogfood_run.outputs.exit_code }}"
+
+  reusable-smoke:
+    # Note: if this Nursery repository is ever made private, add
+    # `permissions: { contents: read }` and `secrets: { nursery_token: ${{ secrets.GITHUB_TOKEN }} }`.
+    uses: ./.github/workflows/garden-reusable.yml
+    with:
+      flow: verify_all
+      approval_branch: main
+      nursery_ref: main

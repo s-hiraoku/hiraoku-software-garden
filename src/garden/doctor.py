@@ -236,11 +236,17 @@ def run_doctor(
             )
         )
     else:
+        upstream = manifest.get("upstream") if isinstance(manifest, dict) else None
+        hint = (
+            f" (install from {upstream} ref {pinned_ref[:12]} into ~/.gemini/config/plugins/pstack or .agents/skills)"
+            if upstream and pinned_ref
+            else ""
+        )
         items.append(
             DiagnosticItem(
                 id="common_harness",
                 status="warn",
-                detail=f"{definition.common_harness.name} not found in default search paths",
+                detail=f"{definition.common_harness.name} not found in default search paths{hint}",
             )
         )
 
