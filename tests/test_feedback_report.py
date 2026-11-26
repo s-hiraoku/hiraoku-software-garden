@@ -7,7 +7,12 @@ import unittest
 from unittest.mock import patch
 
 from garden.artifacts import render_summary_markdown
-from garden.report import label_transition_for, post_github_report
+from garden.report import (
+    clear_github_running,
+    label_transition_for,
+    mark_github_running,
+    post_github_report,
+)
 from tests.helpers import run_cli
 
 
@@ -228,3 +233,44 @@ class FeedbackAndReportTests(unittest.TestCase):
             self.assertIn("HTTP 502 Bad Gateway", res["label_warning"])
             self.assertFalse(any("--remove-label" in c for c in calls))
             self.assertFalse(any(c[:3] == ["gh", "issue", "view"] for c in calls))
+
+    def test_mark_and_clear_github_running_labels_without_force(self):
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "label", "create"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "already exists")
+            if cmd[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, json.dumps({"labels": [{"name": "garden:running"}]}), ""
+                )
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch("garden.report.subprocess.run", side_effect=fake_run):
+            marked = mark_github_running(7)
+            cleared = clear_github_running(7)
+
+        self.assertEqual(marked["added_labels"], ["garden:running"])
+        self.assertIsNone(marked["label_warning"])
+        self.assertEqual(cleared["removed_labels"], ["garden:running"])
+        self.assertIsNone(cleared["label_warning"])
+        create_calls = [c for c in calls if c[:3] == ["gh", "label", "create"]]
+        self.assertEqual(len(create_calls), 1)
+        self.assertNotIn("--force", create_calls[0])
+        self.assertIn(["gh", "issue", "edit", "7", "--add-label", "garden:running"], calls)
+        self.assertIn(["gh", "issue", "edit", "7", "--remove-label", "garden:running"], calls)
+
+        # No-op clear when garden:running is not attached
+        calls.clear()
+
+        def fake_not_attached(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"labels": []}), "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch("garden.report.subprocess.run", side_effect=fake_not_attached):
+            noop = clear_github_running(7)
+        self.assertEqual(noop["removed_labels"], [])
+        self.assertFalse(any("--remove-label" in c for c in calls))

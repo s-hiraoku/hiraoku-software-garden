@@ -107,6 +107,85 @@ def label_transition_for(run_data: dict[str, Any]) -> tuple[list[str], list[str]
     return add, remove
 
 
+def _ensure_managed_label(lbl: str, *, cwd: Path | None = None) -> None:
+    """Create a managed label with default styling if missing, preserving existing definitions."""
+    color, desc = MANAGED_LABEL_SPECS.get(lbl, ("ededed", "Managed by Software Garden"))
+    subprocess.run(
+        ["gh", "label", "create", lbl, "--color", color, "--description", desc],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _fetch_attached_labels(issue_number: int, *, cwd: Path | None = None) -> set[str] | None:
+    view_proc = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--json", "labels"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if view_proc.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(view_proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    return {
+        str(item.get("name"))
+        for item in (parsed.get("labels") or [])
+        if isinstance(item, dict) and item.get("name")
+    }
+
+
+def mark_github_running(issue_number: int, *, cwd: Path | None = None) -> dict[str, Any]:
+    """Attach `garden:running` to a GitHub Issue or PR when a Garden run starts."""
+    if issue_number <= 0:
+        raise ValueError("issue_number must be a positive integer")
+    lbl = "garden:running"
+    _ensure_managed_label(lbl, cwd=cwd)
+    add_proc = subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--add-label", lbl],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if add_proc.returncode == 0:
+        return {"issue": issue_number, "added_labels": [lbl], "label_warning": None}
+    return {
+        "issue": issue_number,
+        "added_labels": [],
+        "label_warning": add_proc.stderr.strip() or "add-label failed",
+    }
+
+
+def clear_github_running(issue_number: int, *, cwd: Path | None = None) -> dict[str, Any]:
+    """Remove `garden:running` if attached (used when post_github_report is skipped)."""
+    if issue_number <= 0:
+        raise ValueError("issue_number must be a positive integer")
+    lbl = "garden:running"
+    existing = _fetch_attached_labels(issue_number, cwd=cwd)
+    if existing is not None and lbl not in existing:
+        return {"issue": issue_number, "removed_labels": [], "label_warning": None}
+    rem_proc = subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--remove-label", lbl],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if rem_proc.returncode == 0:
+        return {"issue": issue_number, "removed_labels": [lbl], "label_warning": None}
+    return {
+        "issue": issue_number,
+        "removed_labels": [],
+        "label_warning": rem_proc.stderr.strip() or "remove-label failed",
+    }
+
+
 def post_github_report(
     run_dir: Path,
     issue_number: int,
@@ -132,14 +211,7 @@ def post_github_report(
     label_warnings: list[str] = []
     # Create missing managed labels with defaults without overwriting existing definitions
     for lbl in add_labels:
-        color, desc = MANAGED_LABEL_SPECS.get(lbl, ("ededed", "Managed by Software Garden"))
-        subprocess.run(
-            ["gh", "label", "create", lbl, "--color", color, "--description", desc],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        _ensure_managed_label(lbl, cwd=cwd)
 
     actually_added: list[str] = []
     add_failed = False
@@ -163,25 +235,7 @@ def post_github_report(
     # Only remove attached managed labels if adding the target label succeeded
     actually_removed: list[str] = []
     if remove_labels and not add_failed:
-        existing_labels: set[str] | None = None
-        view_proc = subprocess.run(
-            ["gh", "issue", "view", str(issue_number), "--json", "labels"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if view_proc.returncode == 0:
-            try:
-                parsed = json.loads(view_proc.stdout)
-                existing_labels = {
-                    str(item.get("name"))
-                    for item in (parsed.get("labels") or [])
-                    if isinstance(item, dict) and item.get("name")
-                }
-            except json.JSONDecodeError:
-                existing_labels = None
-
+        existing_labels = _fetch_attached_labels(issue_number, cwd=cwd)
         to_remove = (
             [lbl for lbl in remove_labels if lbl in existing_labels]
             if existing_labels is not None

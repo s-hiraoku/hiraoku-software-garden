@@ -99,11 +99,18 @@ class WorkflowYamlTests(unittest.TestCase):
         text = (REPO_ROOT / ".github" / "workflows" / "garden-reusable.yml").read_text(
             encoding="utf-8"
         )
+        self.assertIn("node_version:", text)
         self.assertIn("node_version_file:", text)
         self.assertIn("uses: actions/setup-node@v4", text)
+        self.assertIn("node-version: ${{ inputs.node_version }}", text)
         self.assertIn("node-version-file: ${{ inputs.node_version_file }}", text)
-        # Node setup must run before the Garden flow so target checks see the pinned toolchain
+        self.assertIn("npm@*|pnpm@*", text)
+        self.assertIn("--mark-running", text)
+        self.assertIn("--clear-running", text)
+        # Node setup and running-label mark must run before the Garden flow
         self.assertLess(text.index("actions/setup-node@v4"), text.index("- name: Run Garden flow"))
+        self.assertLess(text.index("--mark-running"), text.index("- name: Run Garden flow"))
+        self.assertLess(text.index("- name: Post report to GitHub Issue / PR"), text.index("--clear-running"))
 
     def test_garden_dogfood_workflow_uses_trusted_origin_main_cli_and_reusable_smoke(self):
         text = (REPO_ROOT / ".github" / "workflows" / "garden-dogfood.yml").read_text(

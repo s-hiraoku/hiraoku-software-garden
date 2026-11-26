@@ -24,7 +24,12 @@ from garden.git_utils import GitError
 from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
 from garden.release_gate import run_template_release_gate
-from garden.report import format_report, post_github_report
+from garden.report import (
+    clear_github_running,
+    format_report,
+    mark_github_running,
+    post_github_report,
+)
 from garden.spec import SpecError
 from garden.spec_diff import analyze_spec_diff
 from garden.templates import apply_upgrade, init_garden, plan_upgrade
@@ -108,9 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Reporting & GitHub handoff
     rep_cmd = commands.add_parser("report", help="render or post a run summary report")
-    rep_cmd.add_argument("run_dir", type=Path)
+    rep_cmd.add_argument("run_dir", nargs="?", type=Path, default=None)
     rep_cmd.add_argument("--format", dest="fmt", choices=("md", "json"), default="md")
     rep_cmd.add_argument("--post-github-issue", type=int, default=None)
+    rep_cmd.add_argument("--mark-running", type=int, default=None)
+    rep_cmd.add_argument("--clear-running", type=int, default=None)
 
     ref_cmd = commands.add_parser(
         "reflect", help="evaluate Phase-6 reflection gate (dry-run by default)"
@@ -347,6 +354,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "report":
         try:
+            if args.mark_running is not None and args.clear_running is not None:
+                raise ValueError("--mark-running and --clear-running cannot be combined")
+            if args.mark_running is not None:
+                marked = mark_github_running(args.mark_running)
+                print(json.dumps(marked, ensure_ascii=False, indent=2))
+                return 0
+            if args.clear_running is not None:
+                cleared = clear_github_running(args.clear_running)
+                print(json.dumps(cleared, ensure_ascii=False, indent=2))
+                return 0
+            if args.run_dir is None:
+                raise ValueError("run_dir is required unless --mark-running or --clear-running is set")
             if args.post_github_issue is not None:
                 posted = post_github_report(args.run_dir, args.post_github_issue)
                 print(json.dumps(posted, ensure_ascii=False, indent=2))

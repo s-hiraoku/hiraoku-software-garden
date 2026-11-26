@@ -37,8 +37,13 @@ on:
         required: false
         type: string
         default: "main"
+      node_version:
+        description: "Optional Node.js version spec (e.g. '24') when the target repository does not provide a version file"
+        required: false
+        type: string
+        default: ""
       node_version_file:
-        description: "Optional path (in the target checkout) to a Node.js version file such as .node-version; when set, Node.js is installed before checks run, and the npm version in package.json packageManager (npm@<version>) is installed too"
+        description: "Optional path (in the target checkout) to a Node.js version file such as .node-version or .nvmrc; when set alongside or instead of node_version, Node.js and package.json packageManager (npm@<version> or pnpm@<version>) are installed before checks run"
         required: false
         type: string
         default: ""
@@ -115,19 +120,29 @@ jobs:
           python-version: "3.11"
 
       - name: Set up Node.js for target checks
-        if: inputs.node_version_file != ''
+        if: inputs.node_version != '' || inputs.node_version_file != ''
         uses: actions/setup-node@v4
         with:
+          node-version: ${{ inputs.node_version }}
           node-version-file: ${{ inputs.node_version_file }}
 
-      - name: Install pinned npm for target checks
-        if: inputs.node_version_file != ''
+      - name: Install pinned package manager for target checks
+        if: inputs.node_version != '' || inputs.node_version_file != ''
         run: |
           PM="$(node -p 'try { require("./package.json").packageManager || "" } catch { "" }')"
           case "${PM}" in
-            npm@*) npm install --global "${PM}" ;;
-            *) echo "no npm packageManager pin; using bundled npm" ;;
+            npm@*|pnpm@*) npm install --global "${PM}" ;;
+            *) echo "no npm/pnpm packageManager pin; using bundled toolchain" ;;
           esac
+
+      - name: Mark Issue / PR as garden:running
+        if: inputs.issue_number != 0
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
+            --mark-running "${{ inputs.issue_number }}"
 
       - name: Run Garden flow
         id: garden_run
@@ -192,6 +207,15 @@ jobs:
           python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
             "${{ steps.garden_run.outputs.run_dir }}" \
             --post-github-issue "${{ inputs.issue_number }}"
+
+      - name: Clear garden:running when report is skipped
+        if: always() && inputs.issue_number != 0 && (steps.garden_run.outputs.run_dir == '' || steps.garden_run.outputs.skipped_duplicate == 'true')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" report \
+            --clear-running "${{ inputs.issue_number }}"
 
       - name: Execute Phase-6 reflection gate
         # Explicit success() ensures reflect only runs when checkout, run, artifact upload, and report succeeded.
