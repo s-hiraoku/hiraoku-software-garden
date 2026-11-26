@@ -5,3 +5,15 @@ path = "hiraoku-agent-base"
 remote = "https://github.com/s-hiraoku/hiraoku-agent-base.git"
 description = "HAB: エージェント間のメッセージ送受信基盤（1号目の対象リポジトリ、cli/v1）"
 check = ["npm", "run", "demo:hab-mvp", "--", "--simulate"]
+
+[repositories.kobitokey-studio]
+path = "kobitokey-studio"
+remote = "https://github.com/s-hiraoku/kobitokey-studio.git"
+description = "KobitoKey Studio: ZMK キーマップ設定 Web アプリ（2号目の対象リポジトリ、web-frontend/v1、@v0.1.0）"
+check = ["npm", "test"]
+
+[repositories.shift-log]
+path = "shift-log"
+remote = "https://github.com/s-hiraoku/shift-log.git"
+description = "ShiftLog: 許可制アクティビティ記憶 API・MCP・Web モノレポ（3号目の対象リポジトリ、http-api/v1、@v0.1.0）"
+check = ["pnpm", "test"]
