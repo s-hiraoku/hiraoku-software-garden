@@ -114,4 +114,4 @@ flowchart LR
 
 ---
 
-[プロジェクト概要](README.md) · [ソフトウェアガーデンの思想](docs/philosophy.md) · [設計書](docs/implementation/design.md) · [詳細設計書](docs/implementation/detailed-design.md) · [外部参考用語集](docs/references/external-terms.md)
+[リポジトリ概要](README.md) · [ソフトウェアガーデンの思想](docs/philosophy.md) · [概要設計書](docs/design/overview.md) · [詳細設計書](docs/design/detailed-design.md) · [使い方](docs/guides/usage.md) · [外部参考用語集](docs/references/external-terms.md)

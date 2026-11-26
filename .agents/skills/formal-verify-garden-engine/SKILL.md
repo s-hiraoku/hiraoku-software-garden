@@ -65,7 +65,7 @@ When the verifier exits `1`, inspect `"counterexamples"` in the JSON output. Eac
 - `meta`: the exact flow parameters and outcome sequences that reproduced it.
 
 Distinguish real bugs from verifier drift:
-- **Real bug:** The trace violates one of the eight plain-English promises above under current design rules (`docs/implementation/detailed-design.md`). Fix the production code (or report the finding without weakening the invariant).
+- **Real bug:** The trace violates one of the eight plain-English promises above under current design rules (`docs/design/detailed-design.md`). Fix the production code (or report the finding without weakening the invariant).
 - **Verifier drift:** You intentionally changed a function signature, patched symbol name, or new valid verdict/mode in `src/garden/`. Update `scripts/verify_invariants.py` to match the new contract, confirm the updated invariant catches a deliberately broken variant, and then advance **Last verified sync commit** above to the new commit SHA.
 
 ## Updating after intended changes

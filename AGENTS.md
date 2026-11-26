@@ -1,6 +1,6 @@
 # Hiraoku Software Garden
 
-このリポジトリは、複数の対象リポジトリで作業するためのナーサリーです。[設計と使い方](docs/implementation/README.md)を参照してください。用語の意味は[用語集](GLOSSARY.md)に合わせます。
+このリポジトリは、複数の対象リポジトリで作業するためのナーサリーです。[使い方ガイド](docs/guides/usage.md) と [概要設計書](docs/design/overview.md) を参照してください。用語の意味は[用語集](GLOSSARY.md)に合わせます。
 
 - `python3 garden.py list` で対象リポジトリを探します。登録先とチェックの呼び出しは [garden.toml](garden.toml) にあります。
 - 対象リポジトリで作業する前に、そのリポジトリの指示と作業手順を確認します。

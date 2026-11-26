@@ -1,10 +1,9 @@
 # ソフトウェアガーデン詳細設計書
 
-この文書は、[ソフトウェアガーデン設計書](design.md) の方針と7工程の流れを、そのまま実装と検証に着手できる水準の仕様（アーキテクチャ、ファイル配置、スキーマ、ステートマシン、プロトコル、CLI、マイルストーン）に落とし込んだものです。用語は [用語集](../../GLOSSARY.md) に従います。
+この文書は、[ソフトウェアガーデン概要設計書](overview.md) の方針と 7 工程の流れを、最終形の技術仕様（アーキテクチャ、ファイル配置、スキーマ、ステートマシン、プロトコル、CLI）として定義したものです。用語は [用語集（ユビキタス言語）](../../GLOSSARY.md) に従います。
 
-> **現在地（実装済みと今後の拡張）**
-> - **MVP-1〜MVP-4 完了**: Python パッケージ構成（`pyproject.toml`・`src/garden/`・`python3 -m garden`・互換シム `garden.py`）、カタログ（`list` / `check` / `register` / `status`）、`.garden/garden.toml` ローダーと厳格バリデーター、仕様パーサー・条件単位差分解析（`spec-diff`）・信頼できる承認ブランチによる Trust Anchor 照合、`garden doctor`、決定論的ステートマシン実行エンジン（`garden run`・`[[triggers]]` 自動解決 `auto`・2層判定・Worktree 分離＋`verified_commit` 永続化・ローカル＆GitHub HTML マーカー重複スキップ・`Run Artifacts`）、実プロバイダー対応エージェントアダプター（`codex` / `claude` / `antigravity` / `custom` / `mock`）と事後ガード（`guard.py`）、工程⑥の反映ゲート（`garden reflect`・ベース祖先＆エージェント差分検証）、介入レコード（`garden feedback add|from-comment|update|summary`）と運用メトリクス（`garden metrics`）、`garden report`（ラベル自動作成＆Artifacts URL 付与）、`harnesses/pstack.toml`、全4型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`・`--nursery-ref` 版固定・`init` / `upgrade` / `template-gate`）、再利用可能 GitHub Actions ワークフロー（`garden-reusable.yml` / `garden-feedback-reusable.yml`）、ナーサリー自身のドッグフーディング＆`reusable-smoke` 実 CI 稼働、有界全状態形式検証（8不変条件・61,842状態）、および 1 号目の実対象リポジトリ HAB（`s-hiraoku/hiraoku-agent-base`）への導入・設計書 §6 の 3 条件実証＋実 GitHub Actions 稼働確認（[実証記録](evidence/mvp4-hab/README.md)）。
-> - **今後の拡張（Post-MVP）**: 初回リリースタグ（`v0.1.0`）の発行、`observe_only` から `propose_pr`（実エージェント修正＋`garden reflect` PR 提案）への段階的な委譲拡大、および 2 号目以降の対象リポジトリ（Web フロントエンド / HTTP API 等）への横展開。
+> **文書の位置づけ**
+> この文書は最終形の技術仕様を定義します。現在の MVP における実装範囲・割り切り・制約は [現在の MVP 設計](../evolution/current-mvp.md)、段階的な育成計画と各段階の完了基準は [MVP 成長プラン](../evolution/roadmap.md) を参照してください。
 
 ---
 
@@ -59,9 +58,9 @@ flowchart LR
     REP --> ISSUE
 ```
 
-### 1.2 ナーサリーのディレクトリ構成（実装目標）
+### 1.2 ナーサリーのディレクトリ構成
 
-Python 3.11 以上を対象とし、標準ライブラリ中心（外部依存は最小限）のパッケージ構成に移行します。既存の `python3 garden.py list` / `check` は、ルート直下の薄いエントリポイント（シム）で後方互換を維持します。なお、`python3 garden.py` 実行時やリポジトリルートからの `unittest` 起動時はルートが `sys.path[0]` に入り、単純な `import garden` では `src/garden/` ではなく `garden.py` 自身を読み込んで衝突するため、シム側で `__path__` に `src/garden/` を公開したうえで `garden.cli:main` へ委譲します。
+Python 3.11 以上を対象とし、標準ライブラリ中心（外部依存は最小限）のパッケージ構成とします。既存の `python3 garden.py list` / `check` は、ルート直下の薄いエントリポイント（シム）で後方互換を維持します。なお、`python3 garden.py` 実行時やリポジトリルートからの `unittest` 起動時はルートが `sys.path[0]` に入り、単純な `import garden` では `src/garden/` ではなく `garden.py` 自身を読み込んで衝突するため、シム側で `__path__` に `src/garden/` を公開したうえで `garden.cli:main` へ委譲します。
 
 ```text
 hiraoku-software-garden/
@@ -84,32 +83,37 @@ hiraoku-software-garden/
 ├── src/
 │   └── garden/
 │       ├── __init__.py
+│       ├── __main__.py             # python3 -m garden エントリポイント
 │       ├── cli.py                  # argparse ベースのサブコマンド統合
-│       ├── catalog.py              # カタログ (garden.toml) の読み込みと list / check
+│       ├── resources.py            # パッケージ同梱テンプレート・共通の開発ハーネスマニフェスト解決
+│       ├── git_utils.py            # Git 操作・ref 解決・ワークツリー管理ユーティリティ
+│       ├── catalog.py              # カタログ (garden.toml) の読み込み・list / check / register
 │       ├── definition.py           # ガーデン定義 (.garden/garden.toml) のパースと厳格検証
 │       ├── spec.py                 # 仕様書 (YAMLフロントマター・AC/INV) と承認SHA照合
+│       ├── spec_diff.py            # 承認済み仕様との条件単位差分と影響解析 (spec-diff)
 │       ├── doctor.py               # 環境・Git・仕様・pstack マニフェスト診断
 │       ├── engine.py               # 宣言的ステップのステートマシン実行と冪等・worktree管理
 │       ├── checks.py               # check / formal_check 実行と2層判定
 │       ├── guard.py                # forbidden_paths / allowed_paths / 権限・上限の事後検査
 │       ├── adapters/
 │       │   ├── base.py             # Agent Adapter 契約 (request.json / response.json)
-│       │   ├── command.py          # 外部 CLI 呼び出し汎用アダプター (codex/claude/antigravity)
+│       │   ├── command.py          # 外部 CLI 呼び出し汎用アダプター
+│       │   ├── providers.py        # codex / claude / antigravity 実プロバイダー正規化
 │       │   └── mock.py             # テスト用決定論モックアダプター
 │       ├── artifacts.py            # .garden/runs/<run-id>/ の書き出しとスキーマ生成
 │       ├── report.py               # summary.md 生成・GitHub コメント/ラベル遷移
-│       ├── feedback.py             # 介入レコードの記録と集計
-│       └── templates.py            # テンプレート検出・init・upgrade (構造化差分＋オプトイン)
-├── tests/
-│   ├── test_catalog.py             # 既存 test_garden.py を移行・維持
-│   ├── test_definition.py
-│   ├── test_spec.py
-│   ├── test_engine.py
-│   ├── test_adapters.py
-│   ├── test_templates.py
-│   └── fixtures/                   # 仮想対象リポジトリを用いた結合テスト
+│       ├── publish.py              # 工程⑥の反映ゲート評価・PR 作成・条件付き自動マージ (reflect)
+│       ├── feedback.py             # 介入レコードの記録・コメント解析・状態更新・集計
+│       ├── metrics.py              # 実行記録と介入レコードの横断集計 (metrics)
+│       ├── fleet.py                # 全登録ガーデンの健全性・直近判定の横断表示 (status)
+│       ├── templates.py            # テンプレート検出・init・upgrade (構造化差分＋オプトイン)
+│       └── release_gate.py         # テンプレート新版公開ゲート検証 (template-gate)
+├── .garden/                        # ナーサリー自身の自己ドッグフーディング用ガーデン定義
+├── docs/specs/                     # ナーサリー自身の承認済み仕様
+├── test_garden.py                  # 既存カタログ CLI 後方互換テスト
+├── tests/                          # 各モジュールの単体・結合・ワークフロー検証テスト
 └── .github/
-    └── workflows/                  # 再利用可能ワークフロー・自リポジトリCI
+    └── workflows/                  # 再利用可能ワークフロー・自リポジトリCI・自己ドッグフーディング
 ```
 
 ### 1.3 対象リポジトリ側のファイル配置
@@ -140,6 +144,8 @@ hiraoku-software-garden/
 
 ### 2.1 完全な記述例
 
+MVP-4 の CLI は `required_skills` と `required_mcp` を読み飛ばします。これらの項目を指定しても、`garden doctor` や `garden run` の検査には反映されません。
+
 ```toml
 schema_version = 1
 
@@ -151,11 +157,13 @@ version = 1
 name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 skills = ["create-verification-skill", "maintain-verification-skill"]
+required_skills = ["poteto-mode", "create-verification-skill"]  # MVP-6 で対応予定
 
 [target_harness]
 name = "msg-relay-harness"
 version = 1
 setup = ["python3", "-m", "pip", "install", "-e", ".[dev]"]
+required_mcp = ["playwright"]  # MVP-6 で対応予定
 
 [spec]
 paths = ["docs/specs/message-relay.md"]
@@ -190,7 +198,7 @@ status = "active"
 
 [checks.protocol_model]
 kind = "formal_check"
-tool = "quint"                       # tlc | quint | lean4
+tool = "quint"                       # tlc | quint | lean4 | python-exhaustive
 model_path = "formal/relay.qnt"
 command = ["quint", "verify", "formal/relay.qnt", "--invariant=no_duplicate_delivery"]
 timeout_sec = 300
@@ -280,27 +288,38 @@ kind = "auto"
 
 ### 2.2 スキーマ検証ルール（バリデーター）
 
-`definition.py` はロード時に以下を決定論的に検証し、1件でも違反があれば設定エラー（CLI 終了コード `2`）で即座に拒否します。
+最終形の `definition.py` はロード時に以下を決定論的に検証し、違反があれば設定エラー（CLI 終了コード `2`）で拒否します。
 
 | 対象 | 必須/任意 | 制約 |
 | --- | --- | --- |
 | `schema_version` | 必須 | 整数 `1` のみ受理。未知の版はエラー。 |
 | `[template]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）。 |
-| `[common_harness]` | 必須 | `name`（既定 `"pstack"`）、`ref`（40文字小文字16進数 SHA）。 |
-| `[target_harness]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）、`setup`（任意の非空文字列配列）。 |
+| `[common_harness]` | 必須 | `name`（既定 `"pstack"`）、`ref`（40文字小文字16進数 SHA）、`skills`（任意のスキル一覧）、`required_skills`（任意の必須スキル一覧。最終形では `garden doctor` と実行前検査で導入を必須化する）。 |
+| `[target_harness]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）、`setup`（任意の非空文字列配列）、`required_skills` / `required_mcp`（任意の必須スキル・必須 MCP サーバー一覧）。 |
 | `[spec]` | 必須 | `paths`（1件以上のリポジトリ相対パス、親参照 `..` 禁止）、`approval_branch`（既定 `"main"`）。 |
-| `[delegation]` | 必須 | `mode` は `observe_only` / `propose_pr` / `auto_merge`。`max_retries`（0以上の整数、**フロー全体での累計再試行上限**）、`max_duration_sec`（正整数）、`max_cost_usd`（0以上の数値、**フロー1回あたりの累計コスト上限**）。`forbidden_paths` には実装上つねに `.garden/**` と `[spec].paths` 全件を強制追加する（記述漏れがあっても CLI が自動付与し除外不可）。 |
+| `[delegation]` | 必須 | `mode` は `observe_only` / `propose_pr` / `auto_merge`。`allowed_paths` は `propose_pr` と `auto_merge` で1件以上を必須とし、`observe_only` では省略または空配列を許容する。`max_retries`（0以上の整数、**フロー全体での累計再試行上限**）、`max_duration_sec`（正整数）、`max_cost_usd`（0以上の数値、**フロー1回あたりの累計コスト上限**）。`forbidden_paths` には実装上つねに `.garden/**` と `[spec].paths` 全件を強制追加する（記述漏れがあっても CLI が自動付与し除外不可）。 |
 | `[checks.<name>]` | 1件以上 | `command` は非空文字列配列。`kind` は `"check"` または `"formal_check"`。`status` は `"active"` または `"proposed"`（既定 `"active"`）。`formal_check` では `tool`・`model_path`・`invariants` を必須とする。 |
 | `[agents.<name>]` | 任意（`agent` ステップ利用時は必須） | `adapter` は `"codex"` / `"claude"` / `"antigravity"` / `"custom"` / `"mock"`。`command` は非空文字列配列。`timeout_sec`（正整数）。`max_cost_usd`（任意、**1回のエージェント呼び出しあたりの上限**。実効上限は `min(agent.max_cost_usd, remaining_flow_budget)`）。 |
-| `[flows.<name>]` | 1件以上 | `scope` は `"flow_checks"`（既定）または `"all_specs"`。`steps` は1件以上。各 `step.id` はフロー内で一意。参照する `check` / `agent` / `fix_step` / `gate.require_checks` がすべて実在すること。ステップ属性の制約：<br>・`run_on_demand`（真偽値、既定 `false`）: `true` のステップは通常巡回では実行されず、`fix_step` 等からオンデマンド起動される。どのステップからも参照されない `run_on_demand = true` はエラー。<br>・`on_fail`: `"abort"`（即座に `ABORTED` で中断）/ `"escalate"`（`UNSATISFIED` へ遷移）/ `"retry"`（上限内で再実行）/ `"fix_and_retry"`（`fix_step` を必須とし、かつ `effective_delegation.mode != "observe_only"` であること）。<br>・`on_inconclusive`: `"escalate"`（既定、`INCONCLUSIVE` で保留）/ `"retry"` / `"abort"`。<br>・ステップ単位 `max_retries`（任意、0以上の整数）: `step.max_retries <= effective_delegation.max_retries` を強制する（省略時は `effective_delegation.max_retries` を適用）。フロー全体の累計再試行回数も `effective_delegation.max_retries` を超えない。 |
+| `[flows.<name>]` | 1件以上 | `scope` は `"flow_checks"`（既定）または `"all_specs"`。`steps` は1件以上。各 `step.id` はフロー内で一意。参照する `check` / `agent` / `fix_step` / `gate.require_checks` がすべて実在すること。ステップ属性の制約は直下の表を参照。 |
 | `[[triggers]]` | 任意 | `id` は一意。`flow` が `[flows]` に存在すること。 |
+
+**フロー内ステップ属性の制約**:
+
+| 属性 | 許容値と検証ルール |
+| --- | --- |
+| `run_on_demand` | 真偽値（既定 `false`）。`true` のステップは通常巡回では実行されず、`fix_step` 等からオンデマンド起動される。どのステップからも参照されない `run_on_demand = true` はエラー。 |
+| `on_fail` | `"abort"`（即座に `ABORTED` で中断）、`"escalate"`（`UNSATISFIED` へ遷移）、`"retry"`（上限内で再実行）、`"fix_and_retry"`（`fix_step` を必須とし、かつ `effective_delegation.mode != "observe_only"` であること）。 |
+| `on_inconclusive` | `"escalate"`（既定、`INCONCLUSIVE` で保留）、`"retry"`、`"abort"`。 |
+| `max_retries` | 任意の 0 以上の整数。`step.max_retries <= effective_delegation.max_retries` を強制し、省略時は `effective_delegation.max_retries` を適用する。フロー全体の累計再試行回数も `effective_delegation.max_retries` を超えない。 |
 
 ### 2.3 委譲範囲の「厳格化のみ許可」ルール
 
 `[flows.<name>.delegation]` でデフォルト `[delegation]` を上書きするとき、バリデーターは次の順序関係に違反する緩和をすべてエラーで弾きます。
 
 - `mode`: `observe_only (0) < propose_pr (1) < auto_merge (2)` とし、`flow.mode <= default.mode` であること。
-- `allowed_paths`: フロー側の指定はデフォルト `allowed_paths` の部分集合（または同一・空）であること（`mode == "observe_only"` のときは常に空として扱う）。
+- `allowed_paths`
+  - フローのモードが `propose_pr` または `auto_merge` の場合、省略時はデフォルトのリストを継承する。明示する場合はデフォルトのリストの非空の部分集合とし、空配列は設定エラー（終了コード `2`）とする。
+  - フローのモードが `observe_only` の場合、省略または空配列の指定で許可パスを空にする。非空の指定は設定エラー（終了コード `2`）とする。
 - `forbidden_paths`: デフォルトとの和集合をとる（削除不可、追加のみ）。
 - `max_retries`, `max_duration_sec`, `max_cost_usd`: すべて `flow.value <= default.value` であること。
 - `require_checks`: デフォルトの必須チェックを削除できない（追加のみ）。
@@ -373,7 +392,8 @@ AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.
 stateDiagram-v2
     [*] --> PENDING
     PENDING --> PREFLIGHT: 冪等キー計算・ロック/Worktree確保
-    PREFLIGHT --> NEEDS_HUMAN: 仕様未承認 / 定義不備 / 環境診断失敗
+    PREFLIGHT --> NEEDS_HUMAN: 仕様未承認
+    PREFLIGHT --> INCONCLUSIVE: Worktree確保・必須スキル/MCP検査失敗
     PREFLIGHT --> RUNNING: 検査合格
     RUNNING --> RUNNING: 次ステップへ (run_on_demand=true は巡回スキップ / on_fail=retry 上限内再実行 / gate 未実行チェック実行)
     RUNNING --> FIXING: check failed かつ on_fail=fix_and_retry かつ上限内 (fix_step 起動)
@@ -391,7 +411,8 @@ stateDiagram-v2
     SATISFIED --> [*]: 報告出力（条件を満たせば自動反映または結実通知）
 ```
 
-**ステップ実行ルール（`gate`・`run_on_demand`・再試行）**:
+**ステップ実行ルール（`gate`・`run_on_demand`・再試行・定義エラー）**:
+- ガーデン定義（`.garden/garden.toml`）のスキーマ不備や未定義フロー指定は、ステートマシン開始前に CLI 終了コード `2` で即座に失敗し、実行記録（Run Artifacts）を生成しない。
 - `run_on_demand = true` のステップは通常の順次実行ではスキップされ、他ステップの `fix_step` 等から呼び出されたときだけ実行します。
 - `type = "gate"` は、`require_checks` に列挙されたチェックのうち、**現在のワークツリー状態（直近の `FIXING` ステップ以降）で未実行のチェックを順に実行**し、すでに最新状態で実行済みのチェックは直前の結果を参照します。`FIXING` によりファイルが変更された場合は既実行チェック結果のキャッシュを無効化し、その後の `gate` で必須チェックを必ず再実行します。
 - 再試行上限は、ステップ単位の `max_retries`（省略時は `effective_delegation.max_retries`）と、フロー全体の累計上限 `effective_delegation.max_retries` の両方を同時に強制します。
@@ -407,7 +428,18 @@ stateDiagram-v2
 - **Run ID**: `<YYYYMMDDTHHMMSSZ>-<idempotency_key[:8]>`（例: `20261123T084500Z-a1b2c3d4`）。
 - **重複実行の防止（CI・ローカルで統一）**:
   - **スキップ条件（共通）**: 同一 `idempotency_key` かつ終端判定が **`SATISFIED`** の実行記録がすでに存在する場合のみ重複としてスキップします（`--force` 指定時のみ再実行可）。`INCONCLUSIVE` / `UNSATISFIED` / `NEEDS_HUMAN` / `ABORTED` の記録は、環境復旧や修正後の再試行を妨げないためスキップしません。
-  - **GitHub Actions**: ワークフロー側で有効なコンテキスト式を用いて `concurrency: { group: "garden-${{ inputs.flow || github.workflow }}-${{ github.ref }}", cancel-in-progress: false }` を設定し、実行前に Issue/PR の HTML マーカー（`idempotency_key=... verdict=SATISFIED`）を照合して重複をスキップします。
+  - **GitHub Actions** は対象リポジトリと Issue/PR 単位で同時実行を制御し、同一 PR の `auto` と `/garden resume` のラベル更新が重ならないようにする。
+
+    ```yaml
+    concurrency:
+      group: "garden-${{ github.repository }}-${{ inputs.issue_number || github.event.pull_request.number || github.ref }}"
+      cancel-in-progress: false
+      queue: max
+    ```
+
+    `queue: max` で、待機中の PR 検証が後から来た `/garden resume` によって取り消されるのを防ぐ。待機枠は最大 100 件で、上限に達すると新たにキューに入るジョブはキャンセルされる。[GitHub Actions の同時実行制御](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+
+    実行前には Issue/PR の HTML マーカー（`idempotency_key=... verdict=SATISFIED`）を照合して重複をスキップする。
   - **ローカル実行**: `.garden/runs/` 内の既存 `run.json` から同一 `idempotency_key` かつ `verdict == "SATISFIED"` の記録を照合します。作業ツリー汚染を防ぐため、`git worktree add --detach .garden/worktrees/<run-id> <target_commit>`（修正フローでは `git worktree add -b garden/<run-id> .garden/worktrees/<run-id> <target_commit>`）で隔離実行し、終了時に削除します（`--keep-worktree` で調査用に残せます）。
 
 ### 4.3 2層の決定論的判定ルール（`checks.py`）
@@ -438,11 +470,11 @@ stateDiagram-v2
   - `scope = "flow_checks"`（既定）: そのフローのステップ・`gate` で参照する `active` チェックの `covers` に含まれる条件 ID のみを評価対象とする（部分検証・定期回帰フロー向け）。評価対象外の条件は `not_evaluated` として記録し、`INCONCLUSIVE` の原因にしない。
   - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。結実通知（`kind = "harvest"`）および自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。
 - **受け入れ条件（`AC-*` / `INV-*`）単位の判定**（評価対象 ID ごと）:
-  - 先行ステップの失敗・中断・人判断待ちによってフローが途中終了し、当該条件のチェックが実行されなかった場合 → `not_evaluated`（先行する `UNSATISFIED` / `ABORTED` / `NEEDS_HUMAN` を `INCONCLUSIVE` で上書きしない）
-  - フローが完走したにもかかわらず、その ID を `covers` に含み実行された `active` チェックが 0 件 → `inconclusive`（未検証）
-  - 紐づく実行済みチェックに1件でも `inconclusive` がある → `inconclusive`
-  - `inconclusive` がなく、1件でも `failed` がある → `unsatisfied`
-  - 紐づくすべての実行済みチェックが `passed` → `satisfied`
+  - 先行ステップの失敗、中断、人判断待ちによってフローが途中終了し、当該条件のチェックが実行されなかった場合は `not_evaluated` とする（先行する `UNSATISFIED` / `ABORTED` / `NEEDS_HUMAN` を `INCONCLUSIVE` で上書きしない）。
+  - フローが完走したにもかかわらず、その ID を `covers` に含み実行された `active` チェックが 0 件の場合は `inconclusive`（未検証）とする。
+  - 紐づく実行済みチェックに 1 件でも `inconclusive` がある場合は `inconclusive` とする。
+  - `inconclusive` がなく、1 件でも `failed` がある場合は `unsatisfied` とする。
+  - 紐づくすべての実行済みチェックが `passed` の場合は `satisfied` とする。
 - **フロー総合判定の優先順位**（複数事由が同時に成り立つ場合は上位を採用）:
   1. **`NEEDS_HUMAN`**: 仕様未承認、権限・禁止パス違反、履歴改変、`needs_spec_decision`、コスト・時間上限超過のいずれかが発生
   2. **`INCONCLUSIVE`**: 上記がなく、1件でも必須ステップまたは評価対象の受け入れ条件が `inconclusive`（自動反映および結実通知を機械的に禁止）
@@ -480,9 +512,10 @@ stateDiagram-v2
 
 ### 5.1 呼び出し規約
 
-CLI は `.garden/runs/<run-id>/steps/<nn>-<step_id>/` 配下に `request.json` を生成し、次の環境変数を設定して `[agents.<name>].command` を起動します。
+CLI は `.garden/runs/<run-id>/steps/<nn>-<step_id>/` 配下に `request.json` と `prompt.md` を生成し、次の環境変数を設定して `[agents.<name>].command` を起動します。
 - `GARDEN_AGENT_REQUEST`: `request.json` の絶対パス
 - `GARDEN_AGENT_RESPONSE`: アダプターが書き出す `response.json` の絶対パス
+- `GARDEN_AGENT_PROMPT`: エージェントへ渡す指示プロンプト（`prompt.md`）の絶対パス
 - `GARDEN_WORKTREE`: 作業対象の隔離ワークツリーパス
 
 ### 5.2 `request.json` スキーマ
@@ -537,21 +570,21 @@ CLI は `.garden/runs/<run-id>/steps/<nn>-<step_id>/` 配下に `request.json` �
 ```
 
 - `outcome` は `"completed"` | `"needs_spec_decision"` | `"blocked"` | `"failed"`。
-- `outcome == "needs_spec_decision"` の場合、`question` に `{ "prompt": "...", "options": ["..."], "impact": "...", "blocked_work": "..." }` を必須とし、CLI は即座に `NEEDS_HUMAN`（`spec_question`）へ遷移します。
-- アダプターが `response.json` を書き出せなかった場合、または JSON スキーマ不正の場合は `failed` 扱いとし、事後ガードで変更差分を検査します。
+- `outcome == "needs_spec_decision"` の場合、`question` オブジェクトに `prompt` を必須とし、`options`・`impact`・`blocked_work` を推奨項目として含める。CLI は即座に `NEEDS_HUMAN`（`spec_question`）へ遷移する。
+- アダプターが `response.json` を書き出せなかった場合、または JSON スキーマ不正の場合は `failed` 扱いとし、事後ガードで変更差分を検査する。
 
 ### 5.4 事後ガード（`guard.py`）
 
 CLI は `response.json` の `changed_files` を信頼せず、必ずワークツリー上で実行開始時点のコミット `<target_commit>` を基準に実差分を検証します。具体的には以下をすべて検査します。
-- `git merge-base --is-ancestor <target_commit> HEAD`: 偽の場合（エージェントが `<target_commit>` 以前の履歴を改変・巻き戻した場合） → 違反（`history_rewritten`）
-- `git diff --name-only --no-renames <target_commit>`: エージェントが途中でコミットした場合も含め、`<target_commit>` からの全変更・追加・削除パスを取得。`--no-renames` を必須とすることで、禁止パス（例: `docs/specs/x.md`）を許可パス（例: `src/`）へリネーム移動した場合も元の禁止パス削除として確実に検出する。
-- `git status --porcelain --untracked-files=all`: 未追跡ファイルを取得。
+- `git merge-base --is-ancestor <target_commit> HEAD`: 偽の場合（エージェントが `<target_commit>` 以前の履歴を改変・巻き戻した場合）は違反（`history_rewritten`）とする。
+- `git diff --name-only --no-renames <target_commit>`: エージェントが途中でコミットした場合も含め、`<target_commit>` からの全変更・追加・削除パスを取得する。`--no-renames` を必須とすることで、禁止パス（例: `docs/specs/x.md`）を許可パス（例: `src/`）へリネーム移動した場合も元の禁止パス削除として確実に検出する。
+- `git status --porcelain --untracked-files=all`: 未追跡ファイルを取得する。
 
 上記の全変更・未追跡ファイル集合に対して次を判定します。
-- `mode == "observe_only"` なのに変更・未追跡ファイルが1件以上ある → 違反
-- いずれかのパスが `forbidden_paths` に一致する → 違反
-- `allowed_paths` が空でないのに、いずれにも一致しないパスがある → 違反
-- 1回のエージェント呼び出しの `cost_usd > min(agent.max_cost_usd, remaining_flow_budget)`、またはフロー累計 `cost_usd > delegation.max_cost_usd`、またはフロー経過時間 `> delegation.max_duration_sec` → 上限超過
+- `mode == "observe_only"` なのに変更・未追跡ファイルが 1 件以上ある場合は違反とする。
+- いずれかのパスが `forbidden_paths` に一致する場合は違反とする。
+- `propose_pr` と `auto_merge` では、`allowed_paths` のどのパターンにも一致しないパスがある場合は違反とする。
+- 1 回のエージェント呼び出しの `cost_usd > min(agent.max_cost_usd, remaining_flow_budget)`、またはフロー累計 `cost_usd > delegation.max_cost_usd`、またはフロー経過時間 `> delegation.max_duration_sec` の場合は上限超過とする。
 
 違反・超過時は、許可外の差分を自動反映や PR 作成に進めず、`NEEDS_HUMAN` として証拠を残します。
 
@@ -576,7 +609,10 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
     └── 02-fix_failure/
         ├── step.json
         ├── request.json
-        └── response.json
+        ├── prompt.md
+        ├── response.json
+        ├── stdout.log
+        └── stderr.log
 ```
 
 ### 6.2 `run.json` スキーマ
@@ -589,14 +625,15 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
   "trigger": {
     "event": "pull_request",
     "id": "pr-verify",
-    "ref": "refs/pull/42/merge",
+    "ref": "0123456789abcdef0123456789abcdef01234567",
     "issue_or_pr": 42
   },
   "target": {
     "remote": "https://github.com/example/target.git",
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "dirty": false,
-    "evaluation_criteria_changed": false
+    "evaluation_criteria_changed": false,
+    "evaluation_change_reasons": []
   },
   "versions": {
     "cli": "0.1.0",
@@ -612,12 +649,19 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
         "version": 1,
         "approval_branch": "main",
         "approval_commit": "...",
-        "blob_sha": "..."
+        "blob_sha": "...",
+        "modified_in_head": false
       }
     ]
   },
   "flow": "verify_and_fix",
-  "effective_delegation": { "mode": "propose_pr", "max_retries": 2 },
+  "flow_scope": "all_specs",
+  "effective_delegation": {
+    "mode": "propose_pr",
+    "max_retries": 2,
+    "max_duration_sec": 900,
+    "max_cost_usd": 5.0
+  },
   "started_at": "2026-11-23T08:45:00Z",
   "finished_at": "2026-11-23T08:47:12Z",
   "duration_sec": 132.4,
@@ -629,6 +673,10 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
     "AC-002": { "verdict": "satisfied", "checks": ["relay_e2e"] },
     "INV-001": { "verdict": "satisfied", "checks": ["protocol_model"] }
   },
+  "worktree_branch": "garden/20261123T084500Z-a1b2c3d4",
+  "verified_commit": "fedcba9876543210fedcba9876543210fedcba98",
+  "agent_changed_files": ["src/relay.py", "tests/test_relay.py"],
+  "artifacts_url": "https://github.com/example/target/actions/runs/1234567890",
   "escalation": null,
   "steps": ["steps/01-run_e2e/step.json", "steps/02-fix_failure/step.json"]
 }
@@ -642,26 +690,27 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
 <!-- garden:v1 kind=harvest run_id=20261123T084500Z-a1b2c3d4 idempotency_key=a1b2c3d4e5f60718 verdict=SATISFIED commit=0123456 -->
 ### [Garden] 収穫の準備ができました（`verify_and_fix`）
 
-- **対象版**: `0123456` / **承認済み仕様**: `message-relay` v1 (`blob:...`)
+- **対象版**: `0123456` / **承認済み仕様**: `message-relay` v1 (`9f86d08188...`)
 - **判定**: `SATISFIED`（所要 132.4s / 再試行 1回 / 費用 $0.42）
 
-| 条件 ID | 判定 | 根拠チェック | 未確認の点 |
+| 条件 ID | 判定 | 根拠チェック | 備考 / 未確認の点 |
 | --- | --- | --- | --- |
 | `AC-001` | `satisfied` | `unit_test`, `relay_e2e` | なし |
 | `AC-002` | `satisfied` | `relay_e2e` | なし |
 | `INV-001` | `satisfied` | `protocol_model` (Quint, bounded steps=10) | 11ステップ以上の遷移はモデル範囲外 |
 
 - **証拠 Artifacts**: `<workflow-run-url>`
-- **次の判断**: 成果物を確認し、完成・出荷を判断してください。
+- **次の判断**: 成果物と証拠を確認し、完成・出荷を判断してください。
 ```
 
 **種別とラベル遷移**:
 
 | 種別 (`kind`) | 遷移先ラベル | 必須記載項目 | 再開トリガー |
 | --- | --- | --- | --- |
-| `harvest` | `garden:harvest-ready` | 対象版、仕様版、条件ごとの判定・前提・未確認点、証拠リンク | 人が完成・出荷を判断（不備があれば追加指示または仕様改定） |
-| `spec_question` | `garden:needs-human` | 対象機能と版、観察事実、保留している仕事、決めてほしい問いと選択肢・影響 | 回答記録＋仕様変更なら `main` マージ後に `/garden resume` または `garden:ready` 再付与 |
-| `escalation` | `garden:needs-human` | 判定（`INCONCLUSIVE` / `UNSATISFIED` / `NEEDS_HUMAN`）、失敗段階、試したこと、未確認点、人に求める対応 | 環境復旧・指示後に `/garden resume` または再トリガー |
+| `harvest` | `garden:harvest-ready`（結実通知） | 対象版、仕様版、条件ごとの判定・前提・未確認点、証拠リンク | 人が収穫（完成・出荷）を判断（不備があれば追加指示または仕様改定） |
+| `verified` | なし（管理ラベル解除） | 対象版、仕様版、フロー対象条件の判定・証拠リンク（`scope = "flow_checks"` または `evaluation_criteria_changed = true` の `SATISFIED` 時） | 基準変更 PR は人のレビュー・承認待ち |
+| `spec_question` | `garden:needs-human` | 対象機能と版、観察事実、保留している仕事、決めてほしい問いと選択肢・影響 | 回答記録＋仕様変更なら `main` マージ後に PR 上の `/garden resume` または再トリガー |
+| `escalation` | `garden:needs-human` | 判定（`INCONCLUSIVE` / `UNSATISFIED` / `NEEDS_HUMAN`）、失敗段階、試したこと、未確認点、人に求める対応 | 環境復旧・指示後に PR 上の `/garden resume` または再トリガー |
 
 ### 6.4 工程⑦の介入レコード（`feedback.py`）
 
@@ -721,6 +770,7 @@ keywords_any = ["[project.scripts]", "[[bin]]", "\"bin\""]
 
 [common_harness]
 name = "pstack"
+ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
 
 [defaults.delegation]
@@ -762,12 +812,12 @@ search_paths = [
 
 ### 7.3 導入・更新 CLI の振る舞い（`init` / `doctor` / `upgrade`）
 
-- **`garden init [--target <path>] [--type <name>]`**:
-  1. 対象リポジトリの `README.md`、ビルド定義、既存テスト・CI をスキャンし、適合するテンプレート型と根拠を提示（判別不能時は `--type` または対話選択）。
-  2. `.garden/garden.toml`、`.garden/.gitignore`、`docs/specs/<initial>.md`（`status: draft`）、`.github/workflows/garden.yml` を生成する（既存ファイルは `--force` なしでは上書きしない）。
+- **`garden init [--target <path>] [--type <name>] [--version <N>] [--nursery-ref <ref>] [--force]`**:
+  1. 対象リポジトリの `README.md`、ビルド定義、既存テスト・CI をスキャンし、適合するテンプレート型と根拠を提示する（判別不能時は終了コード `2` でエラーを返し、`--type` の明示を求める）。
+  2. `.garden/garden.toml`、`.garden/.gitignore`、`docs/specs/<initial>.md`（`status: draft`）、`.github/workflows/garden.yml` を生成する（既存ファイルは `--force` なしでは上書きしない）。`--nursery-ref` で再利用ワークフローの参照版（実在するブランチ・タグ・SHA）を固定できる。
   3. 初期状態では `delegation.mode = "observe_only"` かつ仕様 `status = "draft"` として安全側に倒す。
-- **`garden doctor [--target <path>]`**:
-  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
+- **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--json]`**:
+  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認（最終形では `required_skills` / `required_mcp` の必須検査も含む）、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
   - 各項目を `ok` / `warn` / `error` の構造化 JSON および人間向け表で出力。
 - **`garden upgrade [--target <path>] [--to <version>] [--apply]`**:
   1. 現在の `[template].version`（`vN`）と候補版（`vM`）の `template.toml` 差分を計算し、ガーデンの独自カスタマイズ（運用担当者が追加したチェック、変更済みコマンド、独自委譲設定）を識別する。
@@ -784,18 +834,18 @@ search_paths = [
 | --- | --- | --- | --- |
 | カタログ（既存互換） | `garden list` | ナーサリーのカタログ（`garden.toml`）を JSON 出力 | `0` 成功 / `2` 設定不正 |
 | カタログ（既存互換） | `garden check <repo-id>...` | カタログ登録済みチェックを実行し JSON 出力 | `0` 全合格 / `1` failed・unavailable あり / `2` 引数・設定不正 |
-| カタログ | `garden register <target> [--id ID] [--description DESC] [--check CMD...]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録 | `0` 成功 / `2` 入力・競合エラー |
-| 導入・保守 | `garden init [--target PATH] [--type TYPE]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
-| 導入・保守 | `garden doctor [--target PATH] [--json]` | 環境・定義・承認仕様・pstack・チェック依存を診断 | `0` error なし / `1` error あり / `2` 定義読込不可 |
+| カタログ | `garden register <target> [--id ID] [--remote URL] [--description DESC] [--check CMD...] [--force]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録 | `0` 成功 / `2` 入力・競合エラー |
+| 導入・保守 | `garden init [--target PATH] [--type TYPE] [--version N] [--nursery-ref REF] [--force]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
+| 導入・保守 | `garden doctor [--target PATH] [--approval-branch BRANCH] [--skip-network] [--json]` | 環境・定義・承認仕様・pstack・チェック依存を診断 | `0` error なし / `1` error あり / `2` Git 異常・定義読込不可 |
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
 | 導入・保守 | `garden spec-diff [--target PATH] [--base REF] [--head REF]` | 承認済み仕様との条件単位差分（追加・削除・変更）と影響チェック・フローを解析 | `0` 整合 / `1` ガーデン更新要（未カバー追加・孤立チェック） / `2` 入力不正 |
-| 導入・保守 | `garden template-gate [--type TYPE] [--version N] [--all] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |
-| 実行・記録 | `garden run <flow> [--target PATH] [--trigger-event E] [--trigger-id ID] [--force] [--keep-worktree]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
+| 導入・保守 | `garden template-gate (--type TYPE \| --all) [--version N] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |
+| 実行・記録 | `garden run <flow> [--target PATH] [--approval-branch BRANCH] [--trigger-event E] [--trigger-id ID] [--trigger-action A] [--trigger-label L] [--issue N] [--force] [--include-proposed] [--check-github-markers] [--existing-comments-file PATH] [--keep-worktree] [--no-worktree] [--json]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
 | 実行・記録 | `garden report <run-dir> [--format md\|json] [--post-github-issue N]` | `run.json` から要約生成・GitHub Issue/PR への投稿とラベル更新 | `0` 成功 / `1` 投稿失敗 / `2` 入力不正 |
 | 実行・記録 | `garden reflect <run-dir> [--base BRANCH] [--execute]` | 工程⑥の反映ゲート判定（既定ドライラン、`--execute` で PR 作成・条件充足時のみ `--auto` マージ） | `0` 反映許可・なし / `1` ブロック・実行失敗 / `2` 入力不正 |
 | 改善・測定 | `garden feedback add\|from-comment\|update\|summary [--target PATH]` | 人の介入レコードの記録（CLI / `/garden feedback` コメント解析）・状態更新・分類別集計 | `0` 成功 / `2` 入力不正 |
 | 改善・測定 | `garden metrics [--target PATH] [--limit N]` | 実行記録と介入レコードから判定率・再試行・再発条件・介入解消率を集計 | `0` 成功 / `2` 入力不正 |
-| 改善・測定 | `garden status [--no-self] [--skip-network] [--json]` | ナーサリー自身および `garden.toml` 登録済みの全ガーデンの健全性・診断・テンプレート版・直近判定を横断表示 | `0` 障害なし / `1` error・unavailable あり / `2` カタログ不正 |
+| 改善・測定 | `garden status [--approval-branch BRANCH] [--no-self] [--skip-network] [--json]` | ナーサリー自身および `garden.toml` 登録済みの全ガーデンの健全性・診断・テンプレート版・直近判定を横断表示 | `0` 障害なし / `1` error・unavailable あり / `2` カタログ不正 |
 
 ※ `garden run` の終了コードを `1` (`UNSATISFIED`) / `3` (`INCONCLUSIVE`) / `4` (`NEEDS_HUMAN`) / `5` (`ABORTED`) で分けることで、GitHub Actions 側が「失敗」「判定不能」「人判断待ち」「明示中断」を機械的に分岐・ラベル付けできます。
 
@@ -806,52 +856,4 @@ search_paths = [
 
 ---
 
-## 9. 実装マイルストーンと検証基準
-
-フィクスチャ／ドッグフーディング用リポジトリで垂直スライスを一気通貫で実証し、その後 1 号目の実対象リポジトリ（メッセージ送受信ツール等）へ接続します。
-
-### MVP-1: 決定論的コアと垂直スライス（最初の実装単位）
-- **実装内容**:
-  1. `pyproject.toml` + `src/garden/` パッケージ化と、`garden.py` 互換シム（既存 `test_garden.py` 全件通過を維持）。
-  2. `definition.py`: `.garden/garden.toml` ローダーと厳格バリデーター（委譲厳格化・`forbidden_paths` 強制含む）。
-  3. `spec.py`: 仕様書のフロントマター解析、`AC-*`/`INV-*` 抽出、`approval_branch` の Git blob SHA 照合。
-  4. `doctor.py`: `garden doctor` の実装（環境・定義・仕様・チェックコマンド検査）。
-  5. `checks.py` + `engine.py` + `artifacts.py`: `check` / `formal_check` ステップ実行、2層判定、`run.json` / `step.json` / `summary.md` 生成、`garden run <flow>`。
-- **完了条件（フィクスチャ結合テストで全件実証）**:
-  - 正常系: 承認済み仕様＋全チェック合格＋必須証拠あり → `SATISFIED`（終了コード `0`）。
-  - 挙動不一致: チェックが終了コード `1` → `UNSATISFIED`（終了コード `1`）。
-  - 判定不能: 終了コード `75` / 起動不能 / タイムアウト / `required_evidence` 欠損 / `formal.json` の `completed=false` → いずれも `INCONCLUSIVE`（終了コード `3`）。
-  - 仕様未承認: 仕様が `draft` または `main` 未マージ → `NEEDS_HUMAN`（終了コード `4`）。
-
-### MVP-2: エージェントアダプター・修正ループ・Worktree 分離・介入記録
-- **実装内容**:
-  1. `adapters/base.py` / `command.py` / `mock.py`: `request.json` / `response.json` 契約と CLI アダプター。
-  2. `guard.py`: 事後差分検査（`forbidden_paths` / `allowed_paths` / `observe_only` 違反検知・コスト/時間上限）。
-  3. `engine.py` 拡張: `fix_and_retry` ループ、冪等キーによる重複スキップ、ローカル `git worktree` 隔離。
-  4. `feedback.py`: `garden feedback add` / `summary`。
-- **完了条件（モックアダプター＋フィクスチャで実証）**:
-  - 初回 `failed` → `fix_failure` が許可範囲内を修正 → 再検証で `SATISFIED`。
-  - アダプターが `.garden/garden.toml` や `docs/specs/*.md` を改変 → `guard.py` が検知して `NEEDS_HUMAN`。
-  - アダプターが `needs_spec_decision` を返却 → 問いと選択肢を含む `summary.md` で `NEEDS_HUMAN`。
-
-### MVP-3: テンプレート導入・更新と GitHub Actions 連携
-- **実装内容**:
-  1. `harnesses/pstack.toml` と最初のテンプレート `templates/cli/v1/`。
-  2. `templates.py`: `garden init` / `garden upgrade`（構造化差分＋`proposed` オプトイン）および公開ゲートテスト。
-  3. `report.py`: HTML マーカー付きコメント生成、`gh` CLI または GitHub REST API 経由の投稿・ラベル遷移。
-  4. 再利用可能 GitHub Actions ワークフロー（イベント受付・`concurrency` 制御・Artifacts アップロード・`/garden resume` 対応）。
-- **完了条件**:
-  - 新規フィクスチャへの `garden init` → `garden doctor` → `garden run` の完走。
-  - `v1`（独自チェック追加済み）からテスト用 `v2` への `garden upgrade` で、独自チェックが壊れず新規チェックが `proposed` として追加されること。
-
-### MVP-4: 1号目の実対象リポジトリ接続（設計書セクション 6 の完了判定）
-- 実対象リポジトリ（例: メッセージ送受信確認ツール）へ `templates/cli/v1` を導入し、ナーサリーのカタログへ登録する。
-- [ソフトウェアガーデン設計書](design.md#6-最初の到達点と完了判定) の3条件を同じ仕事で実証する:
-  1. **普段の確認を任せられる**: 変更を起点に実行され、人がやり直さずに `summary.md` と証拠から判断できる。
-  2. **問題時に判断を引き継げる**: 挙動不一致（`UNSATISFIED`）と環境不備（`INCONCLUSIVE`）を区別し、確認済み段階と未確認段階を示せる。
-  3. **人の手直しが次に効く**: 介入レコードから切り分け手順を対象固有のハーネスへ取り込み、同じ障害を再実行したときにガーデンが根拠付きで報告できる。
-- 実証記録: [HAB での MVP-4 実証](evidence/mvp4-hab/README.md)（2026-11-23 にローカル実行、2026-11-25 に GitHub Actions で `SATISFIED`）。
-
----
-
-[ソフトウェアガーデン設計書](design.md) · [ナーサリーの設計と使い方](README.md) · [用語集](../../GLOSSARY.md)
+[ソフトウェアガーデン概要設計書](overview.md) · [使い方](../guides/usage.md) · [現在の MVP 設計](../evolution/current-mvp.md) · [MVP 成長プラン](../evolution/roadmap.md) · [用語集](../../GLOSSARY.md)
