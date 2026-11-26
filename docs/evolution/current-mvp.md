@@ -12,7 +12,7 @@
 - **稼働実績**
   - **ナーサリー自身（自己ドッグフーディング）**: `.garden/garden.toml` と `docs/specs/nursery-cli.md` により、[Garden Self-Dogfood](../../.github/workflows/garden-dogfood.yml)（本体検証と `reusable-smoke`）が `main` push、手動実行、および `.garden/**`・`docs/specs/**`・対象ワークフロー・形式検証スキルを変更する PR で `SATISFIED` として稼働している。初回タグ `v0.1.0` を発行済み。
   - **1 号目の実対象リポジトリ（HAB）**: `s-hiraoku/hiraoku-agent-base`（`cli/v1`）でローカル実行および実 GitHub Actions（PR #291・`workflow_dispatch`）の MVP-4 完了判定 3 条件を実証した（[HAB 実証記録](evidence/mvp4-hab/README.md)）。
-  - **2 号目・3 号目の対象リポジトリ（MVP-5 展開中）**: `s-hiraoku/kobitokey-studio`（`web-frontend/v1`・`@v0.1.0`）と `s-hiraoku/shift-log`（`http-api/v1`・`@v0.1.0`）をカタログ登録し、ローカルでの `garden doctor` と `garden run auto`（`SATISFIED`）を確認済み。
+  - **2 号目・3 号目の対象リポジトリ（MVP-5 展開中）**: `s-hiraoku/kobitokey-studio`（`web-frontend/v1`・`@v0.1.0`・実 Actions Run `45772548303` `SATISFIED`）と `s-hiraoku/shift-log`（`http-api/v1`・`@v0.1.0`・PR #140 で実 Actions `SATISFIED`）をカタログ登録し、実 GitHub Actions での稼働を確認済み。
   - **形式検証**: `python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で、決定論的ステートマシン・結実ゲート・委譲厳格化・反映ゲートの 8 不変条件（61,842 状態）を検証している。
 
 ---
@@ -68,9 +68,7 @@ MVP-4 時点で意図的に割り切っている点と既知の制約をまと�
    最終形では結実を機能（仕様）単位で、承認ブランチ上の統合版について通知する（[詳細設計書 §6.5](../design/detailed-design.md#65-結実の単位と判定する版)）。現在は `scope = "all_specs"` のフローが PR 上で `SATISFIED` かつ `evaluation_criteria_changed == false` なら、その PR に結実を通知する。`run.json` に `spec_results` はなく、仕様フロントマターの `tracking_issue` も読まない。
 6. **仕事の分割と着手順は未実装（対応予定: MVP-7）**
    [詳細設計書 §4.5](../design/detailed-design.md#45-仕事の分割と着手順) の追跡 Issue、`plan.json`、`garden:work` / `garden:ready` / `garden:priority` / `garden:paused` ラベルは未実装で、1 回のトリガーで 1 つのフローを実行する単位に割り切っている。
-7. **`garden:running` ラベルを実行開始時に付けていない（対応予定: MVP-5）**
-   `garden report` は `garden:running` を管理ラベルとして作成し、終了時の報告で外すが、実行開始時に付ける処理はない。
-8. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
+7. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
    HAB のデモスクリプトは失敗時に構造化 JSON を出力しないため、`UNSATISFIED` の要約から失敗段階まで直接読み取れない（詳細: [HAB 実証記録](evidence/mvp4-hab/README.md#今後の改善候補post-mvp)）。
 
 ---
