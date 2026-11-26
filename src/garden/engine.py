@@ -17,7 +17,7 @@ from garden.adapters import (
     run_command_adapter,
     run_mock_adapter,
 )
-from garden.artifacts import write_run_artifacts, write_step_json
+from garden.artifacts import detect_workflow_run_url, write_run_artifacts, write_step_json
 from garden.checks import CheckExecutionResult, run_check
 from garden.definition import (
     CheckConfig,
@@ -526,6 +526,7 @@ def run_flow(
             "worktree_branch": worktree_branch,
             "verified_commit": verified_commit,
             "agent_changed_files": list(agent_changed_files or []),
+            "artifacts_url": detect_workflow_run_url(),
             "started_at": started_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "finished_at": finished_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "duration_sec": duration_sec,

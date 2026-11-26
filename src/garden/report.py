@@ -17,6 +17,11 @@ KIND_TO_LABEL = {
     "escalation": "garden:needs-human",
 }
 MANAGED_LABELS = ("garden:running", "garden:needs-human", "garden:harvest-ready")
+MANAGED_LABEL_SPECS: dict[str, tuple[str, str]] = {
+    "garden:harvest-ready": ("0e8a16", "Software Garden verified all approved criteria"),
+    "garden:needs-human": ("d93f0b", "Software Garden requires human review or decision"),
+    "garden:running": ("1d76db", "Software Garden verification is in progress"),
+}
 MARKER_RE = re.compile(r"<!--\s*garden:v1\s+([^>]+?)\s*-->")
 KV_RE = re.compile(r"([a-zA-Z0-9_]+)=([^\s]+)")
 
@@ -124,28 +129,81 @@ def post_github_report(
             f"gh issue comment failed: {comment_proc.stderr.strip() or comment_proc.stdout.strip()}"
         )
 
-    label_args = ["gh", "issue", "edit", str(issue_number)]
+    label_warnings: list[str] = []
+    # Ensure labels to add exist in the target repository before applying them
     for lbl in add_labels:
-        label_args.extend(["--add-label", lbl])
-    for lbl in remove_labels:
-        label_args.extend(["--remove-label", lbl])
-
-    label_warning: str | None = None
-    if add_labels or remove_labels:
-        lbl_proc = subprocess.run(
-            label_args,
+        color, desc = MANAGED_LABEL_SPECS.get(lbl, ("ededed", "Managed by Software Garden"))
+        subprocess.run(
+            ["gh", "label", "create", lbl, "--force", "--color", color, "--description", desc],
             cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
         )
-        if lbl_proc.returncode != 0:
-            label_warning = lbl_proc.stderr.strip() or "label update failed"
+
+    if add_labels:
+        add_args = ["gh", "issue", "edit", str(issue_number)]
+        for lbl in add_labels:
+            add_args.extend(["--add-label", lbl])
+        add_proc = subprocess.run(
+            add_args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if add_proc.returncode != 0:
+            label_warnings.append(add_proc.stderr.strip() or "add-label failed")
+
+    # Only remove managed labels that are actually attached to the Issue / PR
+    actually_removed: list[str] = []
+    if remove_labels:
+        existing_labels: set[str] | None = None
+        view_proc = subprocess.run(
+            ["gh", "issue", "view", str(issue_number), "--json", "labels"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if view_proc.returncode == 0:
+            try:
+                parsed = json.loads(view_proc.stdout)
+                existing_labels = {
+                    str(item.get("name"))
+                    for item in (parsed.get("labels") or [])
+                    if isinstance(item, dict) and item.get("name")
+                }
+            except json.JSONDecodeError:
+                existing_labels = None
+
+        to_remove = (
+            [lbl for lbl in remove_labels if lbl in existing_labels]
+            if existing_labels is not None
+            else remove_labels
+        )
+        if to_remove:
+            rem_args = ["gh", "issue", "edit", str(issue_number)]
+            for lbl in to_remove:
+                rem_args.extend(["--remove-label", lbl])
+            rem_proc = subprocess.run(
+                rem_args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if rem_proc.returncode == 0:
+                actually_removed = to_remove
+            else:
+                label_warnings.append(rem_proc.stderr.strip() or "remove-label failed")
+
+    label_warning = "; ".join(label_warnings) if label_warnings else None
 
     return {
         "issue": issue_number,
         "comment_url": comment_proc.stdout.strip(),
         "added_labels": add_labels,
-        "removed_labels": remove_labels,
+        "removed_labels": actually_removed,
         "label_warning": label_warning,
     }

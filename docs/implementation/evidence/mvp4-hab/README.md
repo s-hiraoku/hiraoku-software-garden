@@ -36,21 +36,26 @@ HAB 側のブランチ `claude/project-thread-xq4x92` に、`templates/cli/v1` �
 
 ## GitHub Actions での実行
 
-2026-11-25 に、ナーサリーを公開し、ナーサリー #17 と HAB #289 をマージしたうえで、HAB の `main` で `Garden Verify`（`garden.yml`）を手動実行しました。
+2026-11-25 にナーサリーを公開し、ナーサリー #17 と HAB の導入 [PR #289](https://github.com/s-hiraoku/hiraoku-agent-base/pull/289) をマージしました。その後、HAB の `Garden Verify`（`garden.yml`）からナーサリーの `garden-reusable.yml@main` を呼び出しました。
 
 | 実行 | 起点 | 判定 |
 | --- | --- | --- |
+| [45514998327](https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45514998327) | `pull_request`（[PR #291](https://github.com/s-hiraoku/hiraoku-agent-base/pull/291)、フロー `verify_relay`） | `SATISFIED`（実行記録を保存し、[結実を通知](https://github.com/s-hiraoku/hiraoku-agent-base/pull/291#issuecomment-7148093889)） |
 | [45515424129](https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45515424129) | `workflow_dispatch`（`main`、フロー `verify_relay`） | `SATISFIED`（判定の終了コード 0） |
 
-ジョブのログで確かめたこと:
+手動実行のジョブログで、次の動作を確認しました。
 
 - 公開したナーサリーから CLI を認証なしで取得できた。
 - `node_version_file: .node-version` で Node 26.13.1 を準備し、`packageManager` の npm を入れた。
 - 実行記録をアーティファクト `garden-run-verify_relay-45515424129` として保存した。
 
-手動実行のため、PR へのコメントは投稿されていません（`issue_number` が 0）。
+手動実行では `issue_number` が 0 のため、PR コメントの投稿をスキップしました。
 
-## まだ確かめていないこと
+あわせて、ナーサリー自身でも `Garden Self-Dogfood / reusable-smoke`（[Run 45520869748](https://github.com/s-hiraoku/hiraoku-software-garden/actions/runs/45520869748/job/138892071427)）で `garden-reusable.yml` の実稼働を確認しました。
 
-- **PR を起点にした実行と PR へのコメント**: 仕様を承認した後に、HAB で PR を作って確かめます。
-- **失敗した段階の特定**: HAB のデモは失敗時に JSON を出さないため、`UNSATISFIED` の要約からはどの段階で失敗したかまでは分かりません。次の介入の候補です。
+PR #291 の初回実行では、対象リポジトリに未作成の `garden:harvest-ready` が付かず、PR コメントに実行ページへのリンクがありませんでした。ナーサリー側の `report.py` でラベルを自動作成し、不要になった管理ラベルのうち付与済みのものだけを外すようにしました。`artifacts.py` では要約に `証拠 Artifacts` リンクを載せるようにしました。
+
+## 今後の改善候補（Post-MVP）
+
+- **失敗した段階の特定**: HAB のデモは失敗時に JSON を出さないため、`UNSATISFIED` の要約からはどの段階で失敗したかまでは分かりません。次の工程⑦の介入候補です。
+- **委譲範囲の段階的拡大**: 現在は `observe_only` で運用しています。安定した後に `propose_pr`（実エージェント修正＋`garden reflect`）へ広げる予定です。

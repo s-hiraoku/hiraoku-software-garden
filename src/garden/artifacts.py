@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+
+def detect_workflow_run_url() -> str | None:
+    """Build the GitHub Actions workflow run URL when executing inside GitHub Actions."""
+    server = os.environ.get("GITHUB_SERVER_URL", "").strip().rstrip("/")
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip().strip("/")
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if server and repo and run_id:
+        return f"{server}/{repo}/actions/runs/{run_id}"
+    return None
 
 
 def resolve_report_kind(run_data: dict[str, Any], requested_kind: str = "auto") -> str:
@@ -65,7 +76,7 @@ def render_summary_markdown(
         heading,
         "",
         f"- **対象版**: `{commit_short}` / **承認済み仕様**: {spec_desc}",
-        f"- **判定**: `{verdict}`（所要 {duration_sec:.1f}s / 再試行 {retries_used}回 / 費用 \\${cost_usd:.2f}）",
+        f"- **判定**: `{verdict}`（所要 {duration_sec:.1f}s / 再試行 {retries_used}回 / 費用 ${cost_usd:.2f}）",
     ]
 
     if target.get("evaluation_criteria_changed"):
@@ -107,6 +118,10 @@ def render_summary_markdown(
                 lines.append(f"- **影響**: {question['impact']}")
             if question.get("blocked_work"):
                 lines.append(f"- **保留している仕事**: {question['blocked_work']}")
+
+    artifacts_url = run_data.get("artifacts_url") or detect_workflow_run_url()
+    if isinstance(artifacts_url, str) and artifacts_url.strip():
+        lines.extend(["", f"- **証拠 Artifacts**: {artifacts_url.strip()}"])
 
     if kind == "harvest":
         lines.extend(

@@ -1,9 +1,13 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from garden.report import label_transition_for
+from garden.artifacts import render_summary_markdown
+from garden.report import label_transition_for, post_github_report
 from tests.helpers import run_cli
 
 
@@ -79,3 +83,102 @@ class FeedbackAndReportTests(unittest.TestCase):
             js_proc = run_cli("report", str(run_dir), "--format", "json")
             self.assertEqual(js_proc.returncode, 0, js_proc.stderr)
             self.assertEqual(json.loads(js_proc.stdout)["verdict"], "SATISFIED")
+
+    def test_summary_renders_artifacts_url_and_clean_usd_formatting(self):
+        run_data = {
+            "schema_version": 1,
+            "run_id": "20261125T000000Z-abcd1234",
+            "idempotency_key": "abcd1234abcd1234",
+            "flow": "verify_relay",
+            "flow_scope": "all_specs",
+            "verdict": "SATISFIED",
+            "target": {"commit": "886c624000000000", "evaluation_criteria_changed": False},
+            "versions": {"specs": []},
+            "criteria_results": {},
+            "escalation": None,
+            "duration_sec": 5.1,
+            "retries_used": 0,
+            "usage": {"cost_usd": 0.0},
+            "artifacts_url": "https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45514998327",
+        }
+        md = render_summary_markdown(run_data)
+        self.assertIn("費用 $0.00", md)
+        self.assertNotIn("\\$0.00", md)
+        self.assertIn(
+            "- **証拠 Artifacts**: https://github.com/s-hiraoku/hiraoku-agent-base/actions/runs/45514998327",
+            md,
+        )
+
+        # Fallback from GitHub Actions environment variables when artifacts_url is absent
+        run_no_url = dict(run_data)
+        run_no_url.pop("artifacts_url")
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_SERVER_URL": "https://github.com",
+                "GITHUB_REPOSITORY": "s-hiraoku/hiraoku-software-garden",
+                "GITHUB_RUN_ID": "999",
+            },
+        ):
+            md_env = render_summary_markdown(run_no_url)
+        self.assertIn(
+            "- **証拠 Artifacts**: https://github.com/s-hiraoku/hiraoku-software-garden/actions/runs/999",
+            md_env,
+        )
+
+    def test_post_github_report_creates_missing_labels_and_only_removes_attached_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run-1"
+            run_dir.mkdir()
+            run_data = {
+                "schema_version": 1,
+                "run_id": "20261125T000000Z-abcd1234",
+                "idempotency_key": "abcd1234abcd1234",
+                "flow": "verify_relay",
+                "flow_scope": "all_specs",
+                "verdict": "SATISFIED",
+                "target": {"commit": "886c624000000000", "evaluation_criteria_changed": False},
+                "versions": {"specs": []},
+                "criteria_results": {},
+                "escalation": None,
+                "duration_sec": 5.1,
+                "retries_used": 0,
+                "usage": {"cost_usd": 0.0},
+            }
+            (run_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
+
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(list(cmd))
+                if cmd[:3] == ["gh", "issue", "comment"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, "https://github.com/o/r/pull/1#issuecomment-1\n", ""
+                    )
+                if cmd[:3] == ["gh", "issue", "view"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, json.dumps({"labels": [{"name": "garden:needs-human"}]}), ""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with patch("garden.report.subprocess.run", side_effect=fake_run):
+                res = post_github_report(run_dir, 1)
+
+            self.assertIsNone(res["label_warning"])
+            self.assertEqual(res["added_labels"], ["garden:harvest-ready"])
+            self.assertEqual(res["removed_labels"], ["garden:needs-human"])
+            self.assertTrue(
+                any(c[:4] == ["gh", "label", "create", "garden:harvest-ready"] for c in calls)
+            )
+            self.assertTrue(
+                any(
+                    c == ["gh", "issue", "edit", "1", "--add-label", "garden:harvest-ready"]
+                    for c in calls
+                )
+            )
+            self.assertTrue(
+                any(
+                    c == ["gh", "issue", "edit", "1", "--remove-label", "garden:needs-human"]
+                    for c in calls
+                )
+            )
