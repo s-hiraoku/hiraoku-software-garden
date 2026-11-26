@@ -59,7 +59,7 @@ MVP-4 時点で意図的に割り切っている点と既知の制約をまと�
 2. **報告・ラベル遷移の運用エッジケース（対応予定: MVP-5）**
    新ラベル追加失敗時の旧ラベル保護、同一 PR 並行実行時の `concurrency.group` 競合防止、過去実行再表示時の `artifacts_url` 混入防止、既存ラベル色・説明の上書き防止が未対応である。
 3. **必須スキル・必須 MCP の未定義と pstack 手動導入（対応予定: MVP-6）**
-   MCP サーバーの宣言・検査は未実装であり、スキルも `harnesses/pstack.toml` の推奨定義にとどまる。`garden doctor` は pstack ディレクトリ未検出時も `warn` で通し、自動導入導線やエージェントプラグイン連携も未整備である。
+   MCP サーバーの宣言・検査は未実装であり、スキルも `harnesses/pstack.toml` の推奨定義にとどまる。現在の CLI は `.garden/garden.toml` の `required_skills` と `required_mcp` を読み飛ばすため、指定しても `garden doctor` や `garden run` の検査には反映されない。`[skills].core` も必須としては検査していない。`garden doctor` は pstack ディレクトリ未検出時も `warn` で通し、自動導入導線やエージェントプラグイン連携も未整備である。
 4. **実対象リポジトリの既定モードは `observe_only`（対応予定: MVP-7）**
    全テンプレートと HAB の既定委譲モードを `observe_only` に固定している。実エージェントによる修正と `garden reflect` の PR 提案はハーネス標準化後に解放する。
    MVP-4 の事後ガードは、書き込み可能なモードで `allowed_paths` が空の場合に許可パスの照合を省く。書き込み範囲を絞るには非空のリストを指定する。フローで既定のリストを継承するときは `allowed_paths` を省略し、変更を禁止するときは `observe_only` を使う。
@@ -67,7 +67,13 @@ MVP-4 時点で意図的に割り切っている点と既知の制約をまと�
    非公開ナーサリーから別の非公開リポジトリの再利用ワークフローを実行する場合は、ナーサリー側の Actions アクセス許可と、呼び出し側での `secrets.nursery_token`（Contents 読み取り権限）設定が必要である。
 6. **単一リポジトリ評価への割り切り（対応予定: MVP-5 以降）**
    `garden run` と `garden check` は各対象リポジトリ単体の作業ツリーを評価単位としており、複数リポジトリをまたぐ結合シナリオは未対応である。
-7. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
+7. **結実を PR 単位で通知している（対応予定: MVP-8）**
+   最終形では結実を機能（仕様）単位で、承認ブランチ上の統合版について通知する（[詳細設計書 §6.5](../design/detailed-design.md#65-結実の単位と判定する版)）。現在は `scope = "all_specs"` のフローが PR 上で `SATISFIED` かつ `evaluation_criteria_changed == false` なら、その PR に結実を通知する。`run.json` に `spec_results` はなく、仕様フロントマターの `tracking_issue` も読まない。
+8. **仕事の分割と着手順は未実装（対応予定: MVP-7）**
+   [詳細設計書 §4.5](../design/detailed-design.md#45-仕事の分割と着手順) の追跡 Issue、`plan.json`、`garden:work` / `garden:ready` / `garden:priority` / `garden:paused` ラベルは未実装で、1 回のトリガーで 1 つのフローを実行する単位に割り切っている。
+9. **`garden:running` ラベルを実行開始時に付けていない（対応予定: MVP-5）**
+   `garden report` は `garden:running` を管理ラベルとして作成し、終了時の報告で外すが、実行開始時に付ける処理はない。
+10. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
    HAB のデモスクリプトは失敗時に構造化 JSON を出力しないため、`UNSATISFIED` の要約から失敗段階まで直接読み取れない（詳細: [HAB 実証記録](evidence/mvp4-hab/README.md#今後の改善候補post-mvp)）。
 
 ---
