@@ -8,10 +8,11 @@
 
 ## 1. 現在地サマリー
 
-- **現在の到達段階**: **MVP-4 完了**
+- **現在の到達段階**: **MVP-4 完了（MVP-5 進行中）**
 - **稼働実績**
-  - **ナーサリー自身（自己ドッグフーディング）**: `.garden/garden.toml` と `docs/specs/nursery-cli.md` により、[Garden Self-Dogfood](../../.github/workflows/garden-dogfood.yml)（本体検証と `reusable-smoke`）が `main` push、手動実行、および `.garden/**`・`docs/specs/**`・対象ワークフロー・形式検証スキルを変更する PR で `SATISFIED` として稼働している。
-  - **1 号目の実対象リポジトリ（HAB）**: `s-hiraoku/hiraoku-agent-base` に `templates/cli/v1` を導入し、ローカル実行および実 GitHub Actions（PR #291・`workflow_dispatch`）で MVP-4 完了判定の 3 条件を実証した（[HAB 実証記録](evidence/mvp4-hab/README.md)）。
+  - **ナーサリー自身（自己ドッグフーディング）**: `.garden/garden.toml` と `docs/specs/nursery-cli.md` により、[Garden Self-Dogfood](../../.github/workflows/garden-dogfood.yml)（本体検証と `reusable-smoke`）が `main` push、手動実行、および `.garden/**`・`docs/specs/**`・対象ワークフロー・形式検証スキルを変更する PR で `SATISFIED` として稼働している。初回タグ `v0.1.0` を発行済み。
+  - **1 号目の実対象リポジトリ（HAB）**: `s-hiraoku/hiraoku-agent-base`（`cli/v1`）でローカル実行および実 GitHub Actions（PR #291・`workflow_dispatch`）の MVP-4 完了判定 3 条件を実証した（[HAB 実証記録](evidence/mvp4-hab/README.md)）。
+  - **2 号目・3 号目の対象リポジトリ（MVP-5 展開中）**: `s-hiraoku/kobitokey-studio`（`web-frontend/v1`・`@v0.1.0`）と `s-hiraoku/shift-log`（`http-api/v1`・`@v0.1.0`）をカタログ登録し、ローカルでの `garden doctor` と `garden run auto`（`SATISFIED`）を確認済み。
   - **形式検証**: `python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で、決定論的ステートマシン・結実ゲート・委譲厳格化・反映ゲートの 8 不変条件（61,842 状態）を検証している。
 
 ---
@@ -54,24 +55,22 @@ Python 3.11 以上・標準ライブラリのみで動作する。モジュー�
 
 MVP-4 時点で意図的に割り切っている点と既知の制約をまとめる。各制約の解消手順と完了条件は [MVP 成長プラン](roadmap.md#4-今後の成長フェーズmvp-5mvp-8-と最終形) に記載している。
 
-1. **初回リリースタグ未発行（対応予定: MVP-5）**
-   `garden init --nursery-ref <ref>` と再利用ワークフローの `nursery_ref` はブランチ・タグ・コミット SHA に対応しているが、ナーサリー側の初回安定タグ（`v0.1.0`）は未発行である。
-2. **必須スキル・必須 MCP の未定義と pstack 手動導入（対応予定: MVP-6）**
+1. **必須スキル・必須 MCP の未定義と pstack 手動導入（対応予定: MVP-6）**
    MCP サーバーの宣言・検査は未実装であり、スキルも `harnesses/pstack.toml` の推奨定義にとどまる。現在の CLI は `.garden/garden.toml` の `required_skills` と `required_mcp` を読み飛ばすため、指定しても `garden doctor` や `garden run` の検査には反映されない。`[skills].core` も必須としては検査していない。`garden doctor` は pstack ディレクトリ未検出時も `warn` で通し、自動導入導線やエージェントプラグイン連携も未整備である。
-3. **実対象リポジトリの既定モードは `observe_only`（対応予定: MVP-7）**
-   全テンプレートと HAB の既定委譲モードを `observe_only` に固定している。実エージェントによる修正と `garden reflect` の PR 提案はハーネス標準化後に解放する。
+2. **実対象リポジトリの既定モードは `observe_only`（対応予定: MVP-7）**
+   全テンプレートと対象リポジトリの既定委譲モードを `observe_only` に固定している。実エージェントによる修正と `garden reflect` の PR 提案はハーネス標準化後に解放する。
    MVP-4 の事後ガードは、書き込み可能なモードで `allowed_paths` が空の場合に許可パスの照合を省く。書き込み範囲を絞るには非空のリストを指定する。フローで既定のリストを継承するときは `allowed_paths` を省略し、変更を禁止するときは `observe_only` を使う。
-4. **非公開ナーサリー利用時のトークン要件（運用制約）**
+3. **非公開ナーサリー利用時のトークン要件（運用制約）**
    非公開ナーサリーから別の非公開リポジトリの再利用ワークフローを実行する場合は、ナーサリー側の Actions アクセス許可と、呼び出し側での `secrets.nursery_token`（Contents 読み取り権限）設定が必要である。
-5. **単一リポジトリ評価への割り切り（対応予定: MVP-5 以降）**
+4. **単一リポジトリ評価への割り切り（対応予定: MVP-5 以降）**
    `garden run` と `garden check` は各対象リポジトリ単体の作業ツリーを評価単位としており、複数リポジトリをまたぐ結合シナリオは未対応である。
-6. **結実を PR 単位で通知している（対応予定: MVP-8）**
+5. **結実を PR 単位で通知している（対応予定: MVP-8）**
    最終形では結実を機能（仕様）単位で、承認ブランチ上の統合版について通知する（[詳細設計書 §6.5](../design/detailed-design.md#65-結実の単位と判定する版)）。現在は `scope = "all_specs"` のフローが PR 上で `SATISFIED` かつ `evaluation_criteria_changed == false` なら、その PR に結実を通知する。`run.json` に `spec_results` はなく、仕様フロントマターの `tracking_issue` も読まない。
-7. **仕事の分割と着手順は未実装（対応予定: MVP-7）**
+6. **仕事の分割と着手順は未実装（対応予定: MVP-7）**
    [詳細設計書 §4.5](../design/detailed-design.md#45-仕事の分割と着手順) の追跡 Issue、`plan.json`、`garden:work` / `garden:ready` / `garden:priority` / `garden:paused` ラベルは未実装で、1 回のトリガーで 1 つのフローを実行する単位に割り切っている。
-8. **`garden:running` ラベルを実行開始時に付けていない（対応予定: MVP-5）**
+7. **`garden:running` ラベルを実行開始時に付けていない（対応予定: MVP-5）**
    `garden report` は `garden:running` を管理ラベルとして作成し、終了時の報告で外すが、実行開始時に付ける処理はない。
-9. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
+8. **1 号目 HAB の対象固有のハーネス改善候補（対応予定: MVP-5）**
    HAB のデモスクリプトは失敗時に構造化 JSON を出力しないため、`UNSATISFIED` の要約から失敗段階まで直接読み取れない（詳細: [HAB 実証記録](evidence/mvp4-hab/README.md#今後の改善候補post-mvp)）。
 
 ---
