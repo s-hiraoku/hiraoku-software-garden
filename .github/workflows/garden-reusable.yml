@@ -54,8 +54,9 @@ jobs:
   run-garden:
     runs-on: ubuntu-latest
     concurrency:
-      group: garden-${{ inputs.flow }}-${{ github.ref }}-${{ inputs.issue_number }}
+      group: garden-${{ github.repository }}-${{ inputs.issue_number || github.event.pull_request.number || github.ref }}
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4

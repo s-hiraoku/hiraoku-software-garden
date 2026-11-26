@@ -109,24 +109,24 @@ class FeedbackAndReportTests(unittest.TestCase):
             md,
         )
 
-        # Fallback from GitHub Actions environment variables when artifacts_url is absent
-        run_no_url = dict(run_data)
-        run_no_url.pop("artifacts_url")
-        with patch.dict(
-            os.environ,
-            {
-                "GITHUB_SERVER_URL": "https://github.com",
-                "GITHUB_REPOSITORY": "s-hiraoku/hiraoku-software-garden",
-                "GITHUB_RUN_ID": "999",
-            },
+        # Do not leak an unrelated GitHub Actions run URL when re-rendering a run without artifacts_url
+        for run_without_url in (
+            {k: v for k, v in run_data.items() if k != "artifacts_url"},
+            {**run_data, "artifacts_url": None},
         ):
-            md_env = render_summary_markdown(run_no_url)
-        self.assertIn(
-            "- **証拠 Artifacts**: https://github.com/s-hiraoku/hiraoku-software-garden/actions/runs/999",
-            md_env,
-        )
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_SERVER_URL": "https://github.com",
+                    "GITHUB_REPOSITORY": "s-hiraoku/hiraoku-software-garden",
+                    "GITHUB_RUN_ID": "999",
+                },
+            ):
+                md_env = render_summary_markdown(run_without_url)
+            self.assertNotIn("証拠 Artifacts", md_env)
+            self.assertNotIn("/actions/runs/999", md_env)
 
-    def test_post_github_report_creates_missing_labels_and_only_removes_attached_labels(self):
+    def test_post_github_report_creates_missing_labels_without_force_and_only_removes_attached_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run-1"
             run_dir.mkdir()
@@ -155,6 +155,9 @@ class FeedbackAndReportTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         cmd, 0, "https://github.com/o/r/pull/1#issuecomment-1\n", ""
                     )
+                if cmd[:3] == ["gh", "label", "create"]:
+                    # Simulate existing label preserved without --force
+                    return subprocess.CompletedProcess(cmd, 1, "", "already exists")
                 if cmd[:3] == ["gh", "issue", "view"]:
                     return subprocess.CompletedProcess(
                         cmd, 0, json.dumps({"labels": [{"name": "garden:needs-human"}]}), ""
@@ -167,9 +170,10 @@ class FeedbackAndReportTests(unittest.TestCase):
             self.assertIsNone(res["label_warning"])
             self.assertEqual(res["added_labels"], ["garden:harvest-ready"])
             self.assertEqual(res["removed_labels"], ["garden:needs-human"])
-            self.assertTrue(
-                any(c[:4] == ["gh", "label", "create", "garden:harvest-ready"] for c in calls)
-            )
+            create_calls = [c for c in calls if c[:3] == ["gh", "label", "create"]]
+            self.assertEqual(len(create_calls), 1)
+            self.assertEqual(create_calls[0][:4], ["gh", "label", "create", "garden:harvest-ready"])
+            self.assertNotIn("--force", create_calls[0])
             self.assertTrue(
                 any(
                     c == ["gh", "issue", "edit", "1", "--add-label", "garden:harvest-ready"]
@@ -182,3 +186,45 @@ class FeedbackAndReportTests(unittest.TestCase):
                     for c in calls
                 )
             )
+
+    def test_post_github_report_keeps_old_label_when_add_label_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run-1"
+            run_dir.mkdir()
+            run_data = {
+                "schema_version": 1,
+                "run_id": "20261125T000000Z-abcd1234",
+                "idempotency_key": "abcd1234abcd1234",
+                "flow": "verify_relay",
+                "flow_scope": "all_specs",
+                "verdict": "SATISFIED",
+                "target": {"commit": "886c624000000000", "evaluation_criteria_changed": False},
+                "versions": {"specs": []},
+                "criteria_results": {},
+                "escalation": None,
+                "duration_sec": 5.1,
+                "retries_used": 0,
+                "usage": {"cost_usd": 0.0},
+            }
+            (run_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
+
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(list(cmd))
+                if cmd[:3] == ["gh", "issue", "comment"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, "https://github.com/o/r/pull/1#issuecomment-1\n", ""
+                    )
+                if cmd[:3] == ["gh", "issue", "edit"] and "--add-label" in cmd:
+                    return subprocess.CompletedProcess(cmd, 1, "", "HTTP 502 Bad Gateway")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with patch("garden.report.subprocess.run", side_effect=fake_run):
+                res = post_github_report(run_dir, 1)
+
+            self.assertEqual(res["added_labels"], [])
+            self.assertEqual(res["removed_labels"], [])
+            self.assertIn("HTTP 502 Bad Gateway", res["label_warning"])
+            self.assertFalse(any("--remove-label" in c for c in calls))
+            self.assertFalse(any(c[:3] == ["gh", "issue", "view"] for c in calls))
