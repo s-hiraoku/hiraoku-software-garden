@@ -1,187 +1,57 @@
 # hiraoku-software-garden
 
-ソフトウェアを植物として捉え、それぞれのリポジトリに育成環境を整えるための開発の拠点（ナーサリー）です。ここに蓄えた育て方のテンプレートを、対象リポジトリの用途と仕様に合わせて適用すると、そのソフトウェアのガーデンが生まれます。
+ソフトウェアを植物として捉え、それぞれの対象リポジトリに育成環境（ガーデン）を整えるための開発拠点（**ナーサリー**）です。
+
+このリポジトリに蓄えた育て方のテンプレート、共通 CLI（`garden`）、再利用可能ワークフロー、共通の開発ハーネス（pstack）の設定を対象リポジトリへ適用することで、対象ごとのガーデンを立ち上げて育てます。
 
 ## 目指すソフトウェアファクトリー
 
-1. **人が仕様を定める。** 誰のどんな願いをかなえるのか、守るべき性質と完成の条件を決めます。
-2. **ガーデンが育てる。** トリガーを受けてAIが実装と検証を繰り返します。仕様を満たしたと判断したら、成果物と検証の根拠を添えて人に知らせます。
-3. **人が完成を判断する。** 成果物を確かめ、出荷するか、さらに手を入れるかを決めます。
+1. **人が仕様を定める。** 誰のどんな願いをかなえるのか、守るべき不変条件と受け入れ条件を決めます。
+2. **ガーデンが育てる。** イベントをきっかけに、承認済み仕様の範囲で AI が実装と検証を繰り返します。すべての条件を満たしたと確かめたら、成果物と証拠を添えて**結実**を人に知らせます。
+3. **人が収穫を決める。** 成果物と証拠を確かめ、最終的にリリースできる状態（**収穫**）と認めて出荷するか、さらに手を入れるかを決めます。
 
-仕様の役割、形式検証を取り入れる理由、収穫の判断についての基本方針をまとめています。[ソフトウェアガーデンの思想](docs/philosophy.md)
+基本方針は [ソフトウェアガーデンの思想](docs/philosophy.md)、用語の定義は [用語集（ユビキタス言語）](GLOSSARY.md) にまとめています。
 
-## このリポジトリの役割
+## このリポジトリ（ナーサリー）の役割
 
-複数の対象リポジトリで使う開発手順と、対象ごとのチェックを呼び出す入口を、このナーサリーに置きます。共通の開発ハーネスには pstack を使い、製品固有の仕様、設計上の制約、検証の実装は対象リポジトリで育てます。一つのガーデンで得た知見が他のガーデンでも役立つと確かめられたら、共通のテンプレートに取り込みます。
-
-## 必要なもの
-
-- [uv](https://docs.astral.sh/uv/)（推奨）または [pipx](https://pipx.pypa.io/)。どちらも、ナーサリーの CLI をインストールせずにその場で実行するために使います。
-- Python 3.11 以上（CLI は標準ライブラリだけで動きます）
-- Git
-- GitHub CLI `gh`（任意。`garden doctor` のブランチ保護の確認と、`garden report` の Issue / PR への投稿に使います）
-- 共通の開発ハーネス pstack（任意。`garden doctor` が導入済みかを確認します）
-
-## CLI を実行する
-
-ナーサリーをクローンしたりインストールしたりする必要はありません。対象リポジトリのルートで、次の1行を実行します。
-
-```sh
-uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden init --target .
-```
-
-uv がない環境では pipx を使います。
-
-```sh
-pipx run --spec git+https://github.com/s-hiraoku/hiraoku-software-garden garden init --target .
-```
-
-どちらも GitHub からナーサリーを取得し、一時的な環境で `garden` コマンドを実行します。テンプレートもパッケージに含まれているので、`init` から `doctor`、`run` まで同じ方法で使えます。以降の例では、`uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden` を `garden` と省略して書きます。
-
-```sh
-alias garden='uvx --from git+https://github.com/s-hiraoku/hiraoku-software-garden garden'
-```
-
-## 対象リポジトリにガーデンを導入する
-
-### 1. ガーデンの雛形を生成する
-
-対象リポジトリのルートで `garden init` を実行します。ファイル構成から型を自動で判定し、テンプレートからガーデン定義と仕様の雛形を生成します。現在使えるテンプレートは `cli`、`web-frontend`、`http-api`、`library` の 4 種類です。判定できない場合や明示したい場合は `--type <型名>` で指定します。
-
-```sh
-garden init --target path/to/your-repo
-# タグやコミット SHA でナーサリーの版を固定する場合:
-garden init --target path/to/your-repo --nursery-ref v0.1.0
-```
-
-生成されるファイルは次のとおりです。既存のファイルは `--force` を付けない限り上書きしません。
-
-| ファイル | 役割 |
+| 場所 | 役割 |
 | --- | --- |
-| `.garden/garden.toml` | ガーデン定義。チェック、トリガー、フロー、委譲範囲を書く |
-| `.garden/.gitignore` | 実行記録（`runs/`）と作業用ワークツリー（`worktrees/`）をコミット対象から外す |
-| `docs/specs/<リポジトリ名>.md` | 仕様の雛形（`status: draft`） |
-| `.github/workflows/garden.yml` | PR ごとにガーデンを動かす GitHub Actions ワークフロー |
+| **ナーサリー**（このリポジトリ） | 育て方のテンプレート、共通 CLI（`garden`）、再利用可能ワークフロー、共通の開発ハーネス（pstack）のマニフェスト、対象リポジトリのカタログ（`garden.toml`）を管理する |
+| **対象リポジトリ（ガーデン）** | プロダクトコード、承認済み仕様（`docs/specs/`）、ガーデン定義（`.garden/garden.toml`）、対象固有のハーネスと依存関係を管理する |
 
-### 2. 仕様とチェックを整える
+一つのガーデンで得られた再発防止や検証の知見が他のガーデンでも役立つと確かめられたら、ナーサリーの共通テンプレートへ還元します。
 
-1. `docs/specs/<リポジトリ名>.md` に目的、受け入れ条件（`AC-xxx`）、不変条件（`INV-xxx`）を書きます。
-2. `.garden/garden.toml` の初期チェック（例: `[checks.smoke]`）にある仮のコマンドを、対象リポジトリの実際のテストやチェックに置き換えます。`command` は引数の配列で書きます。`covers` には、そのチェックが確かめる条件 ID を並べます。
-3. 仕様のすべての条件を、いずれかのチェックの `covers` で覆います。チェックのない条件は「確認できなかった」と扱われ、判定が `INCONCLUSIVE` になります（雛形の初期状態では `INV-001` に対応するチェックが未設定のため、必要に応じて追加するか `covers` を合わせます）。
-4. 仕様のフロントマターを `status: approved` にして、承認ブランチ（既定は `main`）にマージします。
+## リポジトリ構成
 
-ガーデンは、CLI / ワークフローで指定された信頼できる承認ブランチ（既定 `main`、変更時は `--approval-branch`）にマージされた仕様とガーデン定義だけを評価の基準にします。作業中のブランチで仕様や定義を書き換えても判定の基準は変わらず、書き換えたことが実行記録に残ります。スキーマの全体は[詳細設計書の「ガーデン定義スキーマ」](docs/implementation/detailed-design.md#2-ガーデン定義スキーマgardengardentoml)を参照してください。
-
-### 3. 診断する
-
-```sh
-garden doctor --target path/to/your-repo
+```text
+hiraoku-software-garden/
+├── src/garden/           # ナーサリー CLI（garden）本体
+├── garden.py             # ローカル互換エントリポイント（python3 garden.py）
+├── garden.toml           # 対象リポジトリのカタログ
+├── templates/            # 種類別テンプレート（cli / web-frontend / http-api / library）
+├── harnesses/            # 共通の開発ハーネス定義（pstack.toml）
+├── .github/workflows/    # 再利用可能ワークフロー・自リポジトリ CI・自己ドッグフーディング
+├── tests/                # 単体・結合・ワークフロー検証テスト
+├── GLOSSARY.md           # 用語集（ユビキタス言語）
+└── docs/                 # 思想・最終形の設計・使い方・MVP の現在地と成長プラン・参考資料
 ```
 
-Git の状態、ガーデン定義の妥当性、承認済み仕様の有無、チェックコマンドを起動できるか、pstack の導入状況、`.garden/.gitignore`、承認ブランチの保護を確認します。`error` が一つでもあると終了コード 1 を返します。ネットワークを使わずに確かめるときは `--skip-network`、機械で読むときは `--json` を付けます。
+## ドキュメント案内
 
-### 4. 手元でフローを実行する
+このリポジトリの文書は、**最終形の設計**と**現在の進化段階（MVP）および成長プラン**を分けて管理しています。
 
-```sh
-garden run verify_only --target path/to/your-repo
-garden report path/to/your-repo/.garden/runs/<run_id>
-```
-
-`garden run` はガーデン定義のフローを実行し、判定と実行記録の場所を JSON で出力します。フロー名に `auto` を渡すと、`--trigger-event` と `--trigger-action` に一致する `[[triggers]]` からフローを自動解決します。実行記録は `.garden/runs/<run_id>/` に残り、`garden report` で人が読める要約（Markdown または `--format json`）にできます。同じコミット・同じ承認済み仕様・同じ定義ですでに `SATISFIED` になっている場合は再実行を省きます（CI では `--check-github-markers` により Issue / PR の HTML マーカーも照合します）。やり直すときは `--force` を付けます。
-また、`fix_and_retry` を含むフローでは `[agents.<名前>]` に `codex` / `claude` / `antigravity` / `custom` / `mock` の各アダプターを指定でき、エージェントの応答を `response.json` へ正規化したうえで事後ガードで変更範囲を検証します。
-
-| 判定 | 終了コード | 意味 |
+| 分類 | 文書 | 内容 |
 | --- | --- | --- |
-| `SATISFIED` | 0 | すべての条件をチェックで確かめられた |
-| `UNSATISFIED` | 1 | 満たしていない条件がある |
-| `INCONCLUSIVE` | 3 | 確かめられなかった条件がある（チェックがない、結果を判断できないなど） |
-| `NEEDS_HUMAN` | 4 | 人の判断が必要になった（仕様の判断を求められた、エージェントの変更が委譲範囲を外れた、時間の上限を超えたなど） |
-| `ABORTED` | 5 | `on_fail = "abort"` などの指定により、フローを途中で打ち切った |
+| 思想・用語 | [ソフトウェアガーデンの思想](docs/philosophy.md) | 仕様、形式検証、結実と収穫、知見還元の基本方針 |
+| 思想・用語 | [用語集（ユビキタス言語）](GLOSSARY.md) | 人とエージェントで意味をそろえるための用語定義 |
+| 最終形の設計 | [ソフトウェアガーデン概要設計書](docs/design/overview.md) | 最終目的、7 工程の流れ、委譲、結実と収穫、テンプレートと改善の全体設計 |
+| 最終形の設計 | [ソフトウェアガーデン詳細設計書](docs/design/detailed-design.md) | アーキテクチャ、`.garden/garden.toml` スキーマ、Trust Anchor、ステートマシン、エージェント契約、CLI 仕様 |
+| 使い方 | [ナーサリーとガーデンの使い方](docs/guides/usage.md) | 対象リポジトリへの導入、実行、GitHub Actions 連携、カタログ管理、ナーサリー開発手順 |
+| 現在の MVP と成長 | [MVP 成長プラン（ロードマップ）](docs/evolution/roadmap.md) | MVP-1〜MVP-4 の実績と、最終形へ育てる今後の成長段階（MVP-5〜MVP-8） |
+| 現在の MVP と成長 | [現在の MVP 設計](docs/evolution/current-mvp.md) | 最終形との差分、現在の実装範囲、割り切り、既知の制約 |
+| 現在の MVP と成長 | [HAB での MVP-4 実証記録](docs/evolution/evidence/mvp4-hab/README.md) | 1 号目の対象リポジトリ（HAB）でのローカル実行と GitHub Actions 実証結果 |
 
-CLI の引数やガーデン定義に誤りがある場合は、終了コード 2 を返します。
+### ドキュメント一覧と参考資料
 
-### 5. GitHub Actions で動かす
-
-生成された `.github/workflows/garden.yml` をコミットすると、ナーサリーの再利用ワークフロー（[garden-reusable.yml](.github/workflows/garden-reusable.yml)）が呼ばれます。このワークフローは対象チェックアウト外の `$RUNNER_TEMP` にナーサリーの CLI を取得して `garden run` を実行し、実行記録をアーティファクトとして保存して、結果を PR にコメントします。
-
-| 起動のきっかけ | 実行するフロー |
-| --- | --- |
-| PR の作成・更新 | `auto`（`.garden/garden.toml` の `[[triggers]]` から解決。初期雛形は `verify_only`） |
-| Issue / PR に `/garden resume` とコメント | `verify_only`（PR の場合は `refs/pull/<番号>/head` をチェックアウトして実行） |
-| Issue / PR に `/garden feedback <分類> <内容> --run-id <実行ID>` とコメント | [garden-feedback-reusable.yml](.github/workflows/garden-feedback-reusable.yml) で介入レコードを記録（`open_pr: true` で PR 永続化も可能） |
-| 手動実行（workflow_dispatch） | 入力で指定したフロー |
-
-判定が `SATISFIED` 以外のときはジョブが失敗します。承認ブランチを保護し、このジョブを必須のチェックにすると、確かめられていない変更をマージできなくなります。
-
-### 6. ナーサリーのカタログに登録する（任意）
-
-ナーサリーの [garden.toml](garden.toml)（カタログ）に対象リポジトリを登録すると、ナーサリーから複数の対象リポジトリのチェックをまとめて実行できます。カタログはナーサリーのチェックアウトにあるファイルなので、この操作はナーサリーをクローンして行います（[ナーサリー自体を開発する](#ナーサリー自体を開発する)を参照）。
-
-```toml
-[repositories.my-cli]
-path = "my-cli"                                   # --workspace（既定はナーサリーの親ディレクトリ）からの相対パス、または絶対パス
-remote = "https://github.com/you/my-cli.git"      # 対象のチェックアウトで git remote get-url が返す URL
-description = "メッセージ送受信を確認する CLI"
-check = ["python3", "-m", "unittest"]
-```
-
-```sh
-python3 garden.py register path/to/my-cli --description "メッセージ送受信を確認する CLI"
-python3 garden.py list
-python3 garden.py check my-cli
-python3 garden.py status --skip-network
-```
-
-詳しくは[ナーサリーの設計と使い方](docs/implementation/README.md#リポジトリを追加する)を参照してください。
-
-## その他のコマンド
-
-| コマンド | 用途 |
-| --- | --- |
-| `garden register <target> [--id ID] [--check CMD...]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録する |
-| `garden status [--no-self] [--skip-network] [--json]` | ナーサリー自身と登録済み全ガーデンの健全性・直近判定を横断表示する |
-| `garden upgrade --target <path> [--to <版>] [--apply]` | テンプレートの新しい版との差分を示し、`--apply` で独自の設定を保ったまま更新する |
-| `garden spec-diff --target <path> [--base main] [--head REF]` | 承認済み仕様との条件単位差分と影響チェック・フローを解析する |
-| `garden template-gate [--type TYPE \| --all] [--output PATH]` | テンプレート公開ゲートを実行し `release-evidence.json` を生成する |
-| `garden reflect <run-dir> [--base main] [--execute]` | 工程⑥の反映ゲートを評価する（既定はドライラン） |
-| `garden feedback add\|from-comment\|update\|summary --target <path>` | 人の介入レコードの記録・状態更新・集計を行う |
-| `garden metrics --target <path> [--limit N]` | 実行記録と介入レコードから判定率・再発条件・介入解消率を集計する |
-
-全サブコマンドの仕様は[詳細設計書の CLI リファレンス](docs/implementation/detailed-design.md#8-cli-リファレンスgarden-サブコマンド一覧)にあります。
-
-## ナーサリー自体を開発する
-
-ナーサリーを変更するときや、カタログを使うときはクローンします。`python3 garden.py`（または `python3 -m garden`）で直接実行するか、仮想環境（`venv` など）内で編集可能モードでインストールして `garden` コマンドとして使います。
-
-```sh
-git clone https://github.com/s-hiraoku/hiraoku-software-garden.git
-cd hiraoku-software-garden
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e .
-```
-
-テストは次のとおりです。
-
-```sh
-python3 -m unittest test_garden.py -v
-python3 -m unittest discover -s tests -v
-python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
-```
-
-PR と `main` への push では、[Nursery CI](.github/workflows/ci.yml) とナーサリー自身のドッグフーディング（[Garden Self-Dogfood](.github/workflows/garden-dogfood.yml)）が実行されます。
-
-## 現在の制約と今後決めること
-
-- ナーサリーの初回リリースタグ（例: `v0.1.0`）の運用開始はこれからです。`garden init --nursery-ref <tag-or-sha>` と再利用ワークフローの `nursery_ref` はブランチ・タグ・コミット SHA のいずれにも固定できる実装になっています。
-- 非公開ナーサリーから別の非公開リポジトリの再利用ワークフローを実行する場合は、ナーサリー側の Settings → Actions → General → Access でアクセスを許可し、呼び出し側で Contents 読み取り権限のあるトークンを `secrets.nursery_token` として渡します（ナーサリー自身のワークフローでは `secrets.GITHUB_TOKEN` で足ります）。
-- `garden init` を Claude Code のプラグインやスラッシュコマンドから呼べるようにすることを検討しています。
-- pstack の自動インストーラーはまだ用意していません。`garden doctor` が [harnesses/pstack.toml](harnesses/pstack.toml) の探索パスと上流参照先を案内します。
-- 1 号目の対象リポジトリ（HAB）での MVP-4 実証および実 GitHub Actions での継続稼働確認は完了済みです（[実証記録](docs/implementation/evidence/mvp4-hab/README.md)）。次の段階として、`observe_only` から `propose_pr` への委譲拡大や 2 号目以降の対象リポジトリへの展開を予定しています。
-
-## 文書案内
-
-- 仕様の承認、実行と検証、テンプレートの運用方針をまとめています。[ソフトウェアガーデン設計書](docs/implementation/design.md)
-- アーキテクチャ、`.garden/garden.toml` スキーマ、ステートマシン、プロトコル、CLI 仕様をまとめています。[ソフトウェアガーデン詳細設計書](docs/implementation/detailed-design.md)
-- 検証環境を整え、再発する問題をチェックに変え、信頼できる手順から自動化を広げます。[開発と検証の進め方](docs/implementation/README.md)
-- 背景にある実践や共有資料を参照できます。[ドキュメント案内](docs/README.md)
+- [ドキュメント案内（読む順番）](docs/README.md) で全文書の配置と読む順番を確認できます。
+- [ソフトウェアファクトリーの参考資料](docs/references/README.md) に外部事例、手法、講演資料、外部参考用語集をまとめています。

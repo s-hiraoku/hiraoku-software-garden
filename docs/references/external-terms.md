@@ -6,8 +6,8 @@
 
 | 用語 | 定義 | ソフトウェアガーデンとの関係 | 出典 |
 | --- | --- | --- | --- |
-| pstack | Lauren Tan が公開した開発スキル集。`/correct`、`/poteto-mode`、`create-verification-skill`、`maintain-verification-skill` などを含む。 | **採用済み**。共通の開発ハーネスとして [harnesses/pstack.toml](../../harnesses/pstack.toml) で `pinned_ref` を管理し、`garden doctor` で導入を確認する。 | [ナーサリーの設計と使い方](../implementation/README.md), [lauren-tan.md](cases/lauren-tan.md) |
-| Home Repo Pattern | Matt Pocock が示した、複数リポジトリの作業を一つの拠点リポジトリから始めるやり方。 | ナーサリー構成の土台。ただし、このリポジトリは Home Repo とは呼ばず「ナーサリー」と呼ぶ。 | [ナーサリーの設計と使い方](../implementation/README.md) |
+| pstack | Lauren Tan が公開した開発スキル集。`/correct`、`/poteto-mode`、`create-verification-skill`、`maintain-verification-skill` などを含む。 | **採用済み**。共通の開発ハーネスとして [harnesses/pstack.toml](../../harnesses/pstack.toml) で `pinned_ref` を管理し、`garden doctor` で導入を確認する。 | [使い方ガイド](../guides/usage.md), [lauren-tan.md](cases/lauren-tan.md) |
+| Home Repo Pattern | Matt Pocock が示した、複数リポジトリの作業を一つの拠点リポジトリから始めるやり方。 | ナーサリー構成の土台。ただし、このリポジトリは Home Repo とは呼ばず「ナーサリー」と呼ぶ。 | [使い方ガイド](../guides/usage.md) |
 | ミシュランの厨房 | Lauren Tan の比喩。自動化より先に、コードベースの設計、型、lint、決定的なチェック、動作の検証を整える開発環境。 | 「品質ゲートを先に固める」というソフトウェアガーデンの優先順位の根拠。 | [lauren-tan.md](cases/lauren-tan.md) |
 | 逆ピラミッド | Tan の優先順位。①コードベースと API の改善、②lint や型などの静的チェック、③文章のルールやスキル、④人間のレビュー。 | 参考（設計書 §5「信頼と改善」の指針）。 | [software-factory-timeline.md](software-factory-timeline.md), [lauren-tan.md](cases/lauren-tan.md) |
 | Dune | Grok Bot チームが Electron アプリ向けに作った、設計制約や lint を組み込んだフレームワーク（例: `useEffect` の禁止）。 | 参考。制約を API や lint に組み込む実例。 | [lauren-tan.md](cases/lauren-tan.md) |
