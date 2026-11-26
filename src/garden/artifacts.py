@@ -119,7 +119,7 @@ def render_summary_markdown(
             if question.get("blocked_work"):
                 lines.append(f"- **保留している仕事**: {question['blocked_work']}")
 
-    artifacts_url = run_data.get("artifacts_url") or detect_workflow_run_url()
+    artifacts_url = run_data.get("artifacts_url")
     if isinstance(artifacts_url, str) and artifacts_url.strip():
         lines.extend(["", f"- **証拠 Artifacts**: {artifacts_url.strip()}"])
 

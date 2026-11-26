@@ -130,17 +130,19 @@ def post_github_report(
         )
 
     label_warnings: list[str] = []
-    # Ensure labels to add exist in the target repository before applying them
+    # Create missing managed labels with defaults without overwriting existing definitions
     for lbl in add_labels:
         color, desc = MANAGED_LABEL_SPECS.get(lbl, ("ededed", "Managed by Software Garden"))
         subprocess.run(
-            ["gh", "label", "create", lbl, "--force", "--color", color, "--description", desc],
+            ["gh", "label", "create", lbl, "--color", color, "--description", desc],
             cwd=cwd,
             capture_output=True,
             text=True,
             check=False,
         )
 
+    actually_added: list[str] = []
+    add_failed = False
     if add_labels:
         add_args = ["gh", "issue", "edit", str(issue_number)]
         for lbl in add_labels:
@@ -152,12 +154,15 @@ def post_github_report(
             text=True,
             check=False,
         )
-        if add_proc.returncode != 0:
+        if add_proc.returncode == 0:
+            actually_added = list(add_labels)
+        else:
+            add_failed = True
             label_warnings.append(add_proc.stderr.strip() or "add-label failed")
 
-    # Only remove managed labels that are actually attached to the Issue / PR
+    # Only remove attached managed labels if adding the target label succeeded
     actually_removed: list[str] = []
-    if remove_labels:
+    if remove_labels and not add_failed:
         existing_labels: set[str] | None = None
         view_proc = subprocess.run(
             ["gh", "issue", "view", str(issue_number), "--json", "labels"],
@@ -203,7 +208,7 @@ def post_github_report(
     return {
         "issue": issue_number,
         "comment_url": comment_proc.stdout.strip(),
-        "added_labels": add_labels,
+        "added_labels": actually_added,
         "removed_labels": actually_removed,
         "label_warning": label_warning,
     }

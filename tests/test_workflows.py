@@ -81,9 +81,16 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("nursery_token:", text)
         self.assertIn("fetch --depth 1", text)
         self.assertIn("if: success() && inputs.reflect", text)
-        # Concurrency must be scoped under jobs.run-garden (not top-level)
+        # Concurrency must be scoped under jobs.run-garden and serialize per repository + issue/PR
         self.assertNotIn("\nconcurrency:\n", text)
         self.assertIn("\n    concurrency:\n", text)
+        self.assertIn(
+            "group: garden-${{ github.repository }}-${{ inputs.issue_number || github.event.pull_request.number || github.ref }}",
+            text,
+        )
+        self.assertIn("cancel-in-progress: false", text)
+        self.assertIn("queue: max", text)
+        self.assertNotIn("group: garden-${{ inputs.flow }}", text)
         # Ensure embedded Python heredoc is properly indented inside run: |
         self.assertIn("          import json, pathlib, sys\n", text)
         self.assertIn("          PY\n", text)
