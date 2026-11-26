@@ -62,12 +62,18 @@ flowchart LR
 ### MVP-3: テンプレート導入・更新と GitHub Actions 連携（完了）
 - **実装内容**
   - `harnesses/pstack.toml` と全 4 型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`）。
-  - `garden init`（`--nursery-ref` 版固定を含む）、`garden upgrade`（独自設定を保ち新規チェックを `proposed` として提案）、`garden template-gate`（公開ゲート）。
-  - `garden report`（HTML マーカー、ラベル自動作成、Artifacts URL 付与）、`garden reflect`（工程⑥反映ゲート）、`garden spec-diff`、`garden register`、`garden status`。
-  - 再利用可能ワークフロー（`garden-reusable.yml` / `garden-feedback-reusable.yml`）、ナーサリー自己ドッグフーディング、`reusable-smoke` 実 CI 稼働、有界全状態形式検証（`python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で 8 不変条件・61,842 状態を検証）。
+  - `garden init`、`garden upgrade`（独自設定を保ち新規チェックを `proposed` として提案）、`garden template-gate`（公開ゲート）、`uvx` / `pipx run` によるインストール不要の実行。
+  - `garden report`（HTML マーカーによる重複スキップ、ラベル遷移）、`garden reflect`（工程⑥反映ゲート）、`garden status`（複数ガーデンの横断表示）、`/garden feedback` コメント解析、`garden metrics`。
+  - 再利用可能ワークフロー（`garden-reusable.yml`）、ナーサリー自己ドッグフーディング、有界全状態形式検証（`python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で 8 不変条件・61,842 状態を検証）。
 
 ### MVP-4: 1号目の実対象リポジトリ接続と完了判定 3 条件（完了）
 1 号目の実対象リポジトリとして HAB（`s-hiraoku/hiraoku-agent-base`）へ `templates/cli/v1` を導入し、カタログへ登録したうえで、最初の到達点となる次の 3 条件を実証した。
+
+- **実装内容**（HAB のローカル実証の後、実 GitHub Actions での完了判定までに追加したもの）
+  - 再利用ワークフローの Node 準備、`garden register`（カタログ登録）、`garden spec-diff`（承認済み仕様との条件単位差分）。
+  - 再利用可能な介入記録ワークフロー（`garden-feedback-reusable.yml`、`open_pr: true` による PR 永続化を含む）。
+  - `garden init --nursery-ref` と再利用ワークフローの `nursery_ref` による版固定、非公開ナーサリー向けの `secrets.nursery_token`、`python3 -m garden`、自己ドッグフーディングの `reusable-smoke` ジョブ。
+  - `garden report` のラベル自動作成と Workflow Artifacts URL の表示。
 
 | 完了条件 | 確認したこと | HAB での実証結果 |
 | --- | --- | --- |
@@ -90,19 +96,20 @@ flowchart LR
      - 同一 PR の `auto` と `/garden resume` に同じ `concurrency.group` を使い、ラベル更新を直列化する。グループはリポジトリと Issue/PR 単位とし、`queue: max` で複数の待機ジョブを保持する。
      - 過去実行の再表示時に無関係な Actions URL が混入しないよう、`artifacts_url` は `garden run` の記録作成時のみ解決する。
      - 既存ラベルの色と説明を上書きしないよう `gh label create` から `--force` を外す。
+     - 実行開始時に `garden:running` を付け、終了時の報告で外す。
   3. **2 号目以降の対象リポジトリ接続**: `web-frontend`、`http-api`、`library` のうち最低 1 つ以上の実対象リポジトリへ導入し、カタログ登録と GitHub Actions 継続稼働を確認する。
   4. **対象固有のハーネス改善**: HAB のデモスクリプトで失敗段階の構造化 JSON を出力するなど、MVP-4 で挙がった改善候補を工程⑦サイクルで反映する。
   5. **複数ガーデンの横断監視**: `garden status` を定常運用し、全対象リポジトリの診断結果・テンプレート版・直近判定を一望できるようにする。
 - **完了条件**
   - タグ固定（`v0.1.0` 以降）で 2 つ以上の異なる型の対象リポジトリが GitHub Actions 上で継続稼働している。
-  - 上記 4 件の報告・ラベル運用ハードニングが回帰テスト付きで解消されている。
+  - 上記 5 件の報告・ラベル運用ハードニングが回帰テスト付きで解消されている。
   - 旧コミットの `auto` 実行中に、新コミットの PR 検証が待機し、その後に `/garden resume` が入るケースを再現する。新コミットの必須チェックが取り消されずに実行され、合格できることを確認する。
   - `garden status` でナーサリー自身と登録済み全ガーデンの状態が正確に集約される。
 
 ### MVP-6: ハーネス標準化（必須スキル・必須 MCP の定義と検証）
 - **目的**: 実エージェントに自律的な実装・修正を委譲する前提として、共通の開発ハーネスと対象固有のハーネスに必要なスキルおよび MCP サーバーを明示的に定義し、機械的に診断・準備できる基盤を整える。
 - **主な取り組み**
-  1. **必須スキル・必須 MCP の宣言スキーマ整備**: `harnesses/pstack.toml` および `.garden/garden.toml`（`[common_harness]` と `[target_harness]`）で、必須スキル（`required_skills`）と必須 MCP サーバー（`required_mcp`、接続確認方法・版固定方針を含む）を宣言できるようにする。
+  1. **必須スキル・必須 MCP の宣言スキーマ整備**: [詳細設計書 §7.2](../design/detailed-design.md#72-共通の開発ハーネスpstackマニフェストharnessespstacktoml) の分担に従い、`harnesses/pstack.toml` の `[skills].core` を全ガーデン共通の必須スキルとして扱い、`.garden/garden.toml` の `[common_harness].required_skills`・`[target_harness].required_skills`・`[target_harness].required_mcp`（接続確認方法・版固定方針を含む）を読み込んで検査できるようにする。
   2. **`garden doctor` と Preflight の厳格化**: 必須スキルや必須 MCP が未導入または未接続の場合、単なる `warn` ではなく `doctor` では `error`、実行前検査では `INCONCLUSIVE` として検出し、不足物と導入手順を明示する。
   3. **導入導線と再現性の整備**: 共通の開発ハーネス（pstack）や必須スキル・MCP 設定を、ローカル環境（Antigravity / Cursor / Claude Code / Codex）および CI 環境へ再現性高く導入できる補助コマンド・設定ガイド・プラグイン連携を整える。
   4. **テンプレート別のハーネス標準パターン策定**: `cli`、`web-frontend`（ブラウザ操作系 MCP / Playwright 等）、`http-api`、`library` の型ごとに、標準の必須スキル・MCP と対象固有のハーネス構成をテンプレートへ組み込む。
@@ -116,7 +123,8 @@ flowchart LR
   1. **実エージェントによる `fix_and_retry` 実証**: `codex`、`claude`、`antigravity` のいずれかの実プロバイダーで、失敗検知、隔離ワークツリーでの修正、事後ガード検査、再検証 `SATISFIED` までを実対象リポジトリで通す。
   2. **工程⑥ `garden reflect` の実運用**: `propose_pr` モードで `verified_commit` から PR を自動作成し、必須チェック通過・ベース祖先・エージェント差分一致の安全条件を満たす運用を確立する（条件付き `auto_merge` も小範囲で検証する）。
   3. **仕様改定フローの自動化**: 承認済み仕様が更新された際に `garden spec-diff` で影響チェックとフローを抽出し、影響範囲の再検証と孤立チェックの検出をワークフローへ組み込む。
-  4. **コスト・時間・権限ガードの実運用チューニング**: 実際のトークン消費、所要時間、エスカレーション頻度を実行記録から観測し、上限値と委譲範囲の標準ガイドラインを整える。
+  4. **仕事の分割と着手順**: [詳細設計書 §4.5](../design/detailed-design.md#45-仕事の分割と着手順) に沿って、追跡 Issue の `garden:ready` から `plan.json` を生成・検証し、`garden:work` Issue の作成、人の優先指定（`garden:priority`）、一時停止（`garden:paused`）、仕様改定時の部分的な計画し直しを実装する。
+  5. **コスト・時間・権限ガードの実運用チューニング**: 実際のトークン消費、所要時間、エスカレーション頻度を実行記録から観測し、上限値と委譲範囲の標準ガイドラインを整える。
 - **完了条件**
   - 1 つ以上の実対象リポジトリで、意図した軽微な不具合から修正、ガード検証、再検証 `SATISFIED`、証拠付き PR 提案までが人手なしで完走し、仕様判断が必要なケースでは `NEEDS_HUMAN` へ安全に停止することを実証する。
   - `propose_pr` と `auto_merge` では、既定設定とフロー上書きの両方で空の `allowed_paths` が設定エラー（終了コード `2`）になることを確認する。
@@ -126,7 +134,7 @@ flowchart LR
 - **主な取り組み**
   1. **知見の共通テンプレート還元（`v1` から `v2` へ）**: 複数ガーデンの介入レコード（`/garden feedback`）と `garden metrics` から共通の失敗パターンを抽出し、`template-gate` の公開条件を満たした `v2` テンプレートを公開して既存ガーデンへ `garden upgrade` で適用する。
   2. **形式検証の横展開**: ナーサリー自身で実績のある有界探索に加えて、対象リポジトリの重要な不変条件（状態遷移、データ整合、プロトコル等）に TLA⁺ / Quint / Lean 4 / 有界探索を適用し、`formal.json` による証拠付き検証を広げる。
-  3. **結実から収穫（リリース）への接続**: 結実通知（`garden:harvest-ready`）を受けた人が完成を判断し、リリースおよびデプロイ後検証（カナリア確認、配布物インストール確認など）へ進める標準手順をテンプレートに組み込む。
+  3. **結実から収穫（リリース）への接続**: [詳細設計書 §6.5](../design/detailed-design.md#65-結実の単位と判定する版) に沿って、結実を PR 単位から機能（仕様）単位に移し、承認ブランチ上の統合版で `spec_results` を判定して追跡 Issue に通知する。結実通知（`garden:harvest-ready`）を受けた人が完成を判断し、リリースおよびデプロイ後検証（カナリア確認、配布物インストール確認など）へ進める標準手順をテンプレートに組み込む。
 - **完了条件**
   - 実運用の介入レコードから導かれた改善が、公開ゲートを通過した新版テンプレートとしてリリースされ、既存ガーデンが独自設定を壊さずに `garden upgrade` で取り込めている。
   - 複数の対象リポジトリで、工程⑦のメトリクス（介入解消率・再発率）が継続的に追跡されている。

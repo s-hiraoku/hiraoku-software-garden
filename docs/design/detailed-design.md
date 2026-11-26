@@ -144,8 +144,6 @@ hiraoku-software-garden/
 
 ### 2.1 完全な記述例
 
-MVP-4 の CLI は `required_skills` と `required_mcp` を読み飛ばします。これらの項目を指定しても、`garden doctor` や `garden run` の検査には反映されません。
-
 ```toml
 schema_version = 1
 
@@ -157,13 +155,14 @@ version = 1
 name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 skills = ["create-verification-skill", "maintain-verification-skill"]
-required_skills = ["poteto-mode", "create-verification-skill"]  # MVP-6 で対応予定
+required_skills = ["create-formal-verification-skill"]  # pstack の core に加えて、このガーデンで必須にするスキル
 
 [target_harness]
 name = "msg-relay-harness"
 version = 1
 setup = ["python3", "-m", "pip", "install", "-e", ".[dev]"]
-required_mcp = ["playwright"]  # MVP-6 で対応予定
+required_skills = ["relay-debug"]    # 対象リポジトリに置く製品固有の必須スキル
+required_mcp = ["playwright"]        # 必須 MCP サーバー
 
 [spec]
 paths = ["docs/specs/message-relay.md"]
@@ -294,8 +293,8 @@ kind = "auto"
 | --- | --- | --- |
 | `schema_version` | 必須 | 整数 `1` のみ受理。未知の版はエラー。 |
 | `[template]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）。 |
-| `[common_harness]` | 必須 | `name`（既定 `"pstack"`）、`ref`（40文字小文字16進数 SHA）、`skills`（任意のスキル一覧）、`required_skills`（任意の必須スキル一覧。最終形では `garden doctor` と実行前検査で導入を必須化する）。 |
-| `[target_harness]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）、`setup`（任意の非空文字列配列）、`required_skills` / `required_mcp`（任意の必須スキル・必須 MCP サーバー一覧）。 |
+| `[common_harness]` | 必須 | `name`（既定 `"pstack"`）、`ref`（40文字小文字16進数 SHA）、`skills`（このガーデンが使う pstack スキルの一覧）、`required_skills`（任意。ナーサリーの `harnesses/pstack.toml` の `[skills].core` に加えて、このガーデンで必須にする pstack スキル）。宣言場所の分担は §7.2 を参照。 |
+| `[target_harness]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）、`setup`（任意の非空文字列配列）、`required_skills`（任意。対象リポジトリに置く製品固有の必須スキル）、`required_mcp`（任意。必須 MCP サーバー一覧）。宣言場所の分担は §7.2 を参照。 |
 | `[spec]` | 必須 | `paths`（1件以上のリポジトリ相対パス、親参照 `..` 禁止）、`approval_branch`（既定 `"main"`）。 |
 | `[delegation]` | 必須 | `mode` は `observe_only` / `propose_pr` / `auto_merge`。`allowed_paths` は `propose_pr` と `auto_merge` で1件以上を必須とし、`observe_only` では省略または空配列を許容する。`max_retries`（0以上の整数、**フロー全体での累計再試行上限**）、`max_duration_sec`（正整数）、`max_cost_usd`（0以上の数値、**フロー1回あたりの累計コスト上限**）。`forbidden_paths` には実装上つねに `.garden/**` と `[spec].paths` 全件を強制追加する（記述漏れがあっても CLI が自動付与し除外不可）。 |
 | `[checks.<name>]` | 1件以上 | `command` は非空文字列配列。`kind` は `"check"` または `"formal_check"`。`status` は `"active"` または `"proposed"`（既定 `"active"`）。`formal_check` では `tool`・`model_path`・`invariants` を必須とする。 |
@@ -339,6 +338,7 @@ version: 1
 status: approved
 title: エージェント間メッセージ送受信の到達保証
 owner: "@s-hiraoku"
+tracking_issue: 40
 ---
 
 ## 目的
@@ -353,7 +353,7 @@ owner: "@s-hiraoku"
 ```
 
 **抽出規約（`spec.py`）**:
-- フロントマターは先頭の `---` 〜 `---` ブロック。必須キーは `spec_id`（文字列）、`version`（正整数）、`status`（`draft` | `approved` | `superseded`）、`title`（文字列）。
+- フロントマターは先頭の `---` 〜 `---` ブロック。必須キーは `spec_id`（文字列）、`version`（正整数）、`status`（`draft` | `approved` | `superseded`）、`title`（文字列）。任意キー `tracking_issue`（正整数）は、その機能の追跡 Issue の番号で、仕事の分割（§4.5）と結実通知（§6.5）の投稿先に使う。
 - 受け入れ条件 ID は正規表現 `^-\s+\*\*(AC-\d{3,})\*\*:\s+(.+)$`、不変条件 ID は `^-\s+\*\*(INV-\d{3,})\*\*:\s+(.+)$` で抽出し、同一ファイル内の重複 ID をエラーにする。
 - `.garden/garden.toml` の `[checks.<name>].covers` に書かれた ID が、参照先仕様書に存在しない場合はバリデーションエラーにする。
 
@@ -380,7 +380,14 @@ AI や未承認 PR が仕様ファイルやガーデン定義（`.garden/garden.
 1. **禁止パスの機械的強制**: `agent` ステップの実行後、`guard.py` が `<target_commit>` を基準に `git diff --name-only --no-renames <target_commit>` および未追跡ファイルを走査し（詳細は §5.4）、`forbidden_paths`（`.garden/**`、`docs/specs/**` 等）や `allowed_paths` 外の変更が1つでもあれば、エージェントの成否にかかわらず違反として変更を破棄（または隔離ブランチを破棄）し `NEEDS_HUMAN`（`delegation_violation`）へ遷移します。
 2. **承認済みガーデン定義による評価と変更時ロック**:
    - 通常の PR 検証では、PR ブランチ側ではなく **`approval_branch` 側の `.garden/garden.toml`** を評価基準として採用します（PR 側で `[flows.*.steps]` から `gate` を外したり、`[flows.*.delegation]` や `[agents]` を書き換えても評価をすり抜けられません）。
-   - `.garden/garden.toml` または仕様ファイルに何らかの差分がある PR（`evaluation_criteria_changed == true`）では、差分一覧を実行記録に残したうえで、たとえ全チェックが `passed` でも `auto_merge` および自動結実通知を機械的に禁止し、必ず `propose_pr`（人のレビュー必須）に落とします。
+   - `.garden/garden.toml` または仕様ファイルに何らかの差分がある PR（`evaluation_criteria_changed == true`）では、差分一覧を実行記録に残したうえで、たとえ全チェックが `passed` でも `auto_merge` と結実通知を機械的に禁止します。実効的な委譲モードは変更の種類ごとに次のとおり降格し、反映には人のレビューと承認ブランチへのマージを必須とします。
+
+     | PR の変更内容 | 実効的な委譲モード |
+     | --- | --- |
+     | 仕様ファイルの変更を含む（ガーデン定義の変更の有無を問わない） | `observe_only` に降格し、許可パスを空にする（§3.2 の仕様改定 PR。エージェントによる修正も行わない） |
+     | ガーデン定義（`.garden/garden.toml`）だけの変更 | 承認済み定義の `auto_merge` を `propose_pr` に降格する（`observe_only` と `propose_pr` はそのまま） |
+
+     どちらの場合も `SATISFIED` の報告は結実（`kind = "harvest"`）ではなく `verified` とし、基準の変更を人がレビューするまで収穫の判断には進めません。
 
 ---
 
@@ -437,7 +444,7 @@ stateDiagram-v2
       queue: max
     ```
 
-    `queue: max` で、待機中の PR 検証が後から来た `/garden resume` によって取り消されるのを防ぐ。待機枠は最大 100 件で、上限に達すると新たにキューに入るジョブはキャンセルされる。[GitHub Actions の同時実行制御](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+    `queue: max` で、待機中の PR 検証が後から来た `/garden resume` によって取り消されるのを防ぐ（既定の `queue: single` では待機できるのは 1 件だけで、新しい実行が来ると待機中の実行は取り消される）。待機枠は同時実行グループごとに最大 100 件で、上限に達すると新たにキューに入る実行はキャンセルされる。`queue: max` は `cancel-in-progress: true` と併用できない（ワークフローの検証エラーになる）ため、`cancel-in-progress: false` を明示する。待機の順番は待ち始めた順を基本とするが、保証はされない。[GitHub Actions の同時実行制御](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) · [2026-05-07 の変更履歴](https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues)
 
     実行前には Issue/PR の HTML マーカー（`idempotency_key=... verdict=SATISFIED`）を照合して重複をスキップする。
   - **ローカル実行**: `.garden/runs/` 内の既存 `run.json` から同一 `idempotency_key` かつ `verdict == "SATISFIED"` の記録を照合します。作業ツリー汚染を防ぐため、`git worktree add --detach .garden/worktrees/<run-id> <target_commit>`（修正フローでは `git worktree add -b garden/<run-id> .garden/worktrees/<run-id> <target_commit>`）で隔離実行し、終了時に削除します（`--keep-worktree` で調査用に残せます）。
@@ -468,7 +475,7 @@ stateDiagram-v2
 
 - **受け入れ条件の評価対象スコープ（`flow.scope`）**:
   - `scope = "flow_checks"`（既定）: そのフローのステップ・`gate` で参照する `active` チェックの `covers` に含まれる条件 ID のみを評価対象とする（部分検証・定期回帰フロー向け）。評価対象外の条件は `not_evaluated` として記録し、`INCONCLUSIVE` の原因にしない。
-  - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。結実通知（`kind = "harvest"`）および自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。
+  - `scope = "all_specs"`: `[spec].paths` の承認済み仕様に定義された**すべての** `AC-*` / `INV-*` を評価対象とする。自動反映は、`scope = "all_specs"` のフローが `SATISFIED` かつ `evaluation_criteria_changed == false` の場合にのみ許可する。結実通知（`kind = "harvest"`）の条件は §6.5 で定める。
 - **受け入れ条件（`AC-*` / `INV-*`）単位の判定**（評価対象 ID ごと）:
   - 先行ステップの失敗、中断、人判断待ちによってフローが途中終了し、当該条件のチェックが実行されなかった場合は `not_evaluated` とする（先行する `UNSATISFIED` / `ABORTED` / `NEEDS_HUMAN` を `INCONCLUSIVE` で上書きしない）。
   - フローが完走したにもかかわらず、その ID を `covers` に含み実行された `active` チェックが 0 件の場合は `inconclusive`（未検証）とする。
@@ -503,6 +510,53 @@ stateDiagram-v2
 ```
 
 `completed == false` の場合、終了コードに関わらず判定は `inconclusive` となります。`result` は `"proved"` | `"counterexample_found"` | `"inconclusive"` のいずれかです。
+
+### 4.5 仕事の分割と着手順
+
+工程③で、人が一つの機能の仕様（受け入れ条件と委譲範囲）を承認したら、ガーデンはその範囲で仕事を分け、着手順を決めます。分割と順序の判断はエージェントに任せ、CLI はその結果が承認済み仕様を漏れなく覆っているかを決定論的に検証します。
+
+**仕事の表現**:
+- 一つの機能は、仕様のフロントマター `tracking_issue` が指す**追跡 Issue** に対応する。
+- 一つの仕事は、ラベル `garden:work` を付けた Issue で表す。本文先頭に次の HTML マーカーを置き、担当する受け入れ条件と依存関係を機械可読にする。
+
+  ```markdown
+  <!-- garden:work v1 spec_id=drafts spec_version=2 criteria=AC-001,AC-003 depends_on=41 tracking_issue=40 -->
+  ```
+
+**分割の手順**:
+1. 追跡 Issue にラベル `garden:ready` が付き、かつ参照する仕様が承認ブランチで `status: approved` のときに、`event = "issues"`・`actions = ["labeled"]`・`label = "garden:ready"` のトリガーから分割フローを起動する。
+2. 分割フローの `agent` ステップ（`purpose = "plan"`）は、`response.json` と同じステップディレクトリ（`.garden/runs/<run-id>/steps/<nn>-<step_id>/plan.json`）に仕事の一覧を書き出す。
+
+   ```json
+   {
+     "schema_version": 1,
+     "spec_id": "drafts",
+     "spec_version": 2,
+     "spec_blob_sha": "...",
+     "work_items": [
+       { "key": "save", "title": "下書きをサーバーに保存する", "criteria": ["AC-001"], "depends_on": [] },
+       { "key": "restore", "title": "別の端末で下書きを復元する", "criteria": ["AC-002", "AC-003", "INV-001"], "depends_on": ["save"] }
+     ],
+     "order": ["save", "restore"],
+     "order_rationale": "復元は保存形式に依存するため、保存を先に確定する",
+     "human_priority_applied": false
+   }
+   ```
+3. CLI は `plan.json` を次の規則で検証し、違反があれば `NEEDS_HUMAN`（`invalid_plan`）とする。
+   - 全 `work_items` の `criteria` の和集合が、その仕様の `AC-*` / `INV-*` すべてと一致する（漏れも、仕様にない ID も認めない）。
+   - 各仕事は 1 件以上の条件を持ち、`key` は一意で、`depends_on` は実在する `key` だけを参照し、循環しない。
+   - `order` は全 `key` をちょうど一度ずつ含み、依存関係に矛盾しない。
+4. 検証に通った計画は、委譲モードが `propose_pr` 以上のとき `garden:work` Issue として作成・更新し、追跡 Issue に一覧と `order_rationale` を記録する。`observe_only` では計画を実行記録と追跡 Issue へのコメントに残すだけとする。
+
+**着手順**:
+- 人が追跡 Issue で着手順を明示した場合（ラベル `garden:priority` を付けた仕事を先に扱う、または追跡 Issue に順序を書く）は、依存関係に反しない限りその指定に従い、`human_priority_applied = true` を記録する。
+- 指定がない仕事の順序はエージェントが決め、その理由を `order_rationale` に残す。
+- 依存先が終わった仕事から着手する。仕様判断を待つ仕事（`garden:needs-human`）に依存する仕事は保留し、独立した仕事は続ける。
+
+**分け直し・一時停止・仕様改定**:
+- 育成の途中で仕事を分割・統合・並べ替えるときも、同じ `plan.json` の検証を通し、追跡 Issue に前後の計画を残す。分け直した後も、各仕事から受け入れ条件をたどれる。
+- 人が追跡 Issue にラベル `garden:paused` を付けている間は、その仕様に属する仕事のトリガーを起動せず、スキップした事実だけを記録する。
+- 人が仕様の新版を承認したら、`garden spec-diff` で変わった条件を抽出し、その条件を持つ仕事だけを計画し直す。変わらない条件の仕事と実装は引き継ぐ。
 
 ---
 
@@ -570,6 +624,7 @@ CLI は `.garden/runs/<run-id>/steps/<nn>-<step_id>/` 配下に `request.json` �
 ```
 
 - `outcome` は `"completed"` | `"needs_spec_decision"` | `"blocked"` | `"failed"`。
+- `purpose = "plan"` のステップでは、アダプターは `response.json` と同じディレクトリに §4.5 の `plan.json` を書き出す。
 - `outcome == "needs_spec_decision"` の場合、`question` オブジェクトに `prompt` を必須とし、`options`・`impact`・`blocked_work` を推奨項目として含める。CLI は即座に `NEEDS_HUMAN`（`spec_question`）へ遷移する。
 - アダプターが `response.json` を書き出せなかった場合、または JSON スキーマ不正の場合は `failed` 扱いとし、事後ガードで変更差分を検査する。
 
@@ -673,6 +728,9 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
     "AC-002": { "verdict": "satisfied", "checks": ["relay_e2e"] },
     "INV-001": { "verdict": "satisfied", "checks": ["protocol_model"] }
   },
+  "spec_results": {
+    "message-relay": { "spec_version": 1, "verdict": "satisfied", "criteria": ["AC-001", "AC-002", "INV-001"] }
+  },
   "worktree_branch": "garden/20261123T084500Z-a1b2c3d4",
   "verified_commit": "fedcba9876543210fedcba9876543210fedcba98",
   "agent_changed_files": ["src/relay.py", "tests/test_relay.py"],
@@ -707,8 +765,9 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
 
 | 種別 (`kind`) | 遷移先ラベル | 必須記載項目 | 再開トリガー |
 | --- | --- | --- | --- |
-| `harvest` | `garden:harvest-ready`（結実通知） | 対象版、仕様版、条件ごとの判定・前提・未確認点、証拠リンク | 人が収穫（完成・出荷）を判断（不備があれば追加指示または仕様改定） |
-| `verified` | なし（管理ラベル解除） | 対象版、仕様版、フロー対象条件の判定・証拠リンク（`scope = "flow_checks"` または `evaluation_criteria_changed = true` の `SATISFIED` 時） | 基準変更 PR は人のレビュー・承認待ち |
+| （実行中） | `garden:running` | なし（実行開始時に付け、終了時の報告で外す） | なし |
+| `harvest` | `garden:harvest-ready`（結実通知。§6.5 の条件を満たした機能の追跡 Issue に付ける） | 対象版、仕様版、条件ごとの判定・前提・未確認点、証拠リンク | 人が収穫（完成・出荷）を判断（不備があれば追加指示または仕様改定） |
+| `verified` | なし（管理ラベル解除） | 対象版、仕様版、フロー対象条件の判定・証拠リンク（`SATISFIED` のうち §6.5 の結実条件に当たらないもの。PR 上の検証、`scope = "flow_checks"`、`evaluation_criteria_changed = true` など） | 基準変更 PR は人のレビュー・承認待ち |
 | `spec_question` | `garden:needs-human` | 対象機能と版、観察事実、保留している仕事、決めてほしい問いと選択肢・影響 | 回答記録＋仕様変更なら `main` マージ後に PR 上の `/garden resume` または再トリガー |
 | `escalation` | `garden:needs-human` | 判定（`INCONCLUSIVE` / `UNSATISFIED` / `NEEDS_HUMAN`）、失敗段階、試したこと、未確認点、人に求める対応 | 環境復旧・指示後に PR 上の `/garden resume` または再トリガー |
 
@@ -741,6 +800,17 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
 **CI からの永続化ルール（`garden-feedback-reusable.yml`）**:
 - 既定（`open_pr: false`）では、記録した `.garden/interventions/<id>.json` を Workflow Artifact として保存するのみ（読み取り権限 `contents: read` で動作）。
 - `garden feedback summary` および `garden metrics`（`verified_rate` 等の工程⑦集計）へ永続反映する場合は、呼び出し側ワークフローで `open_pr: true`（要 `contents: write` / `pull-requests: write`、保護ブランチ時は必要に応じて `secrets.feedback_token`）を指定し、介入 JSON のみを専用ブランチ `garden/feedback-<id>` へコミットした PR をマージして対象リポジトリの `.garden/interventions/` へ取り込む。
+
+### 6.5 結実の単位と判定する版
+
+**結実**は、人が受け入れ条件を定めた一つの機能または改善ごとに知らせます。ガーデン定義では、一つの仕様ファイル（`spec_id` とその承認済み版）を一つの機能として扱います。
+
+- **判定する版**: 一つの機能を複数の仕事・PR に分けた場合、途中の変更は委譲範囲内で承認ブランチへ取り込める。結実は、それらを取り込んだ**承認ブランチ上のコミット（統合版）**で判定する。統合版の検証は、承認ブランチへの `push`、スケジュール、`workflow_dispatch` のいずれかのトリガーから `scope = "all_specs"` のフローで起動する。
+- **仕様ごとの判定**: `run.json` の `spec_results` に、仕様ごとの判定（その仕様に属する全条件の判定を §4.3 の規則で集約したもの）を記録する。
+- **結実の条件**: 統合版の実行で、ある仕様の `spec_results.<spec_id>.verdict == "satisfied"` であり、かつ実行全体に `NEEDS_HUMAN` の事由（委譲違反、履歴改変、上限超過など）がない場合に、その仕様について結実を通知する。同じ実行で別の仕様が未充足でも、充足した仕様の結実は妨げない。
+- **PR 上の検証との違い**: PR 上で `scope = "all_specs"` のフローが `SATISFIED` になっても、それは取り込みの根拠（`verified`）であり、結実とはしない。人が収穫を判断する対象は、承認ブランチに取り込まれた版だけとする。
+- **通知先と冪等性**: 結実は仕様の `tracking_issue` に投稿し、ラベル `garden:harvest-ready` を付ける。HTML マーカーには `spec_id`・`spec_version`・仕様の blob SHA・統合版のコミットを含め、同じ組み合わせの結実を重ねて通知しない。`tracking_issue` がない仕様は、実行記録と Workflow Artifacts に結実を残すだけとする。
+- **結実の取り下げ**: 結実を通知した後に、同じ仕様の統合版の検証が `satisfied` でなくなった場合は、追跡 Issue から `garden:harvest-ready` を外し、`escalation` として報告する。
 
 ---
 
@@ -810,6 +880,20 @@ search_paths = [
 
 `garden doctor` は対象リポジトリの `.garden/garden.toml` に書かれた `[common_harness].ref` と、実行環境にある pstack（およびナーサリーの `harnesses/pstack.toml`）を照合し、未導入・バージョン不一致を診断項目として報告します。
 
+#### 必須スキル・推奨スキル・必須 MCP の宣言場所
+
+| 宣言場所 | キー | 意味 |
+| --- | --- | --- |
+| ナーサリーの `harnesses/pstack.toml` | `[skills].core` | 全ガーデン共通の**必須スキル**（共通の開発ハーネスの最小構成） |
+| ナーサリーの `harnesses/pstack.toml` | `[skills].optional` | 全ガーデン共通の**推奨スキル**（必要なガーデンが選んで使う） |
+| テンプレートの `template.toml` | `[common_harness].recommended_skills` | その型で `garden init` が `[common_harness].skills` の初期値として提案するスキル |
+| 対象リポジトリの `.garden/garden.toml` | `[common_harness].skills` | そのガーデンが使う pstack スキル |
+| 対象リポジトリの `.garden/garden.toml` | `[common_harness].required_skills` | `core` に加えて、そのガーデンで必須にする pstack スキル |
+| 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_skills` | 対象リポジトリに置く製品固有の必須スキル（pstack の外） |
+| 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_mcp` | そのガーデンの実行に必須の MCP サーバー |
+
+そのガーデンの実効的な必須スキルは `core ∪ [common_harness].required_skills ∪ [target_harness].required_skills` とします。`garden doctor` はこれらと `required_mcp` のいずれかが未導入・未接続なら `error`、実行前検査（Preflight）では `INCONCLUSIVE` として、不足しているものと導入手順を報告します。
+
 ### 7.3 導入・更新 CLI の振る舞い（`init` / `doctor` / `upgrade`）
 
 - **`garden init [--target <path>] [--type <name>] [--version <N>] [--nursery-ref <ref>] [--force]`**:
@@ -817,7 +901,7 @@ search_paths = [
   2. `.garden/garden.toml`、`.garden/.gitignore`、`docs/specs/<initial>.md`（`status: draft`）、`.github/workflows/garden.yml` を生成する（既存ファイルは `--force` なしでは上書きしない）。`--nursery-ref` で再利用ワークフローの参照版（実在するブランチ・タグ・SHA）を固定できる。
   3. 初期状態では `delegation.mode = "observe_only"` かつ仕様 `status = "draft"` として安全側に倒す。
 - **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--json]`**:
-  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認（最終形では `required_skills` / `required_mcp` の必須検査も含む）、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
+  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、および §7.2 の実効的な必須スキルと `required_mcp` の導入・接続確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
   - 各項目を `ok` / `warn` / `error` の構造化 JSON および人間向け表で出力。
 - **`garden upgrade [--target <path>] [--to <version>] [--apply]`**:
   1. 現在の `[template].version`（`vN`）と候補版（`vM`）の `template.toml` 差分を計算し、ガーデンの独自カスタマイズ（運用担当者が追加したチェック、変更済みコマンド、独自委譲設定）を識別する。
