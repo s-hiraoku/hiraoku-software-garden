@@ -68,7 +68,7 @@ garden init --target path/to/your-repo --nursery-ref <commit-sha-or-tag>
 3. 仕様のすべての条件を、いずれかのチェックの `covers` で覆います。チェックのない条件は「確認できなかった」と扱われ、判定が `INCONCLUSIVE` になります（雛形の初期状態では `INV-001` に対応するチェックが未設定のため、必要に応じて追加するか `covers` を合わせます）。
 4. 仕様のフロントマターを `status: approved` にして、承認ブランチ（既定は `main`）にマージします。
 
-ガーデンは、CLI またはワークフローで指定された信頼できる承認ブランチ（既定 `main`、変更時は `--approval-branch`）にマージされた仕様とガーデン定義だけを評価の基準（Trust Anchor）にします。作業中のブランチで仕様や定義を書き換えても判定の基準は変わらず、書き換えたことが実行記録に残ります。スキーマの詳細は [詳細設計書 §2](../design/detailed-design.md#2-ガーデン定義スキーマgardengardentoml) を参照してください。
+ガーデンは、CLI またはワークフローで指定された信頼できる承認ブランチ（既定 `main`、変更時は `--approval-branch`）にマージされた仕様とガーデン定義だけを評価の基準（Trust Anchor）にします。作業中のブランチで仕様や定義を書き換えても判定の基準は変わらず、書き換えたことが実行記録に残ります。今後対応予定の項目を含むスキーマの定義は [詳細設計書 §2](../design/detailed-design.md#2-ガーデン定義スキーマgardengardentoml) を参照してください。
 
 ### 手順 3: 診断する
 
@@ -108,7 +108,7 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 | 起動のきっかけ | 実行するフローと条件 |
 | --- | --- |
 | PR の作成・更新 | `auto`（`.garden/garden.toml` の `[[triggers]]` から解決。初期雛形は `verify_only`） |
-| PR に `/garden resume` とコメント | `verify_only`（PR の `refs/pull/<番号>/head` をチェックアウトして実行。コメント投稿者が `OWNER`、`MEMBER`、`COLLABORATOR` のいずれかである必要がある。非 PR の Issue では失敗する） |
+| PR に `/garden resume` とコメント | `verify_only`（PR の `refs/pull/<番号>/head` をチェックアウトして実行。コメント投稿者が `OWNER`、`MEMBER`、`COLLABORATOR` のいずれかである必要がある。PR 以外の Issue では `garden` ジョブがスキップされる） |
 | Issue または PR に `/garden feedback <分類> <内容> --run-id <実行ID>` とコメント | [garden-feedback-reusable.yml](../../.github/workflows/garden-feedback-reusable.yml) で介入レコードを記録（`OWNER`、`MEMBER`、`COLLABORATOR` のみ実行可。`open_pr: true` で PR 永続化も可能） |
 | 手動実行（`workflow_dispatch`） | 入力で指定したフロー |
 

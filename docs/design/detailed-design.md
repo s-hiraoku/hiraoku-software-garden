@@ -144,6 +144,8 @@ hiraoku-software-garden/
 
 ### 2.1 完全な記述例
 
+MVP-4 の CLI は `required_skills` と `required_mcp` を読み飛ばします。これらの項目を指定しても、`garden doctor` や `garden run` の検査には反映されません。
+
 ```toml
 schema_version = 1
 
@@ -155,13 +157,13 @@ version = 1
 name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 skills = ["create-verification-skill", "maintain-verification-skill"]
-required_skills = ["poteto-mode", "create-verification-skill"]
+required_skills = ["poteto-mode", "create-verification-skill"]  # MVP-6 で対応予定
 
 [target_harness]
 name = "msg-relay-harness"
 version = 1
 setup = ["python3", "-m", "pip", "install", "-e", ".[dev]"]
-required_mcp = ["playwright"]
+required_mcp = ["playwright"]  # MVP-6 で対応予定
 
 [spec]
 paths = ["docs/specs/message-relay.md"]
@@ -286,7 +288,7 @@ kind = "auto"
 
 ### 2.2 スキーマ検証ルール（バリデーター）
 
-`definition.py` はロード時に以下を決定論的に検証し、1件でも違反があれば設定エラー（CLI 終了コード `2`）で即座に拒否します。
+最終形の `definition.py` はロード時に以下を決定論的に検証し、違反があれば設定エラー（CLI 終了コード `2`）で拒否します。
 
 | 対象 | 必須/任意 | 制約 |
 | --- | --- | --- |
@@ -295,7 +297,7 @@ kind = "auto"
 | `[common_harness]` | 必須 | `name`（既定 `"pstack"`）、`ref`（40文字小文字16進数 SHA）、`skills`（任意のスキル一覧）、`required_skills`（任意の必須スキル一覧。最終形では `garden doctor` と実行前検査で導入を必須化する）。 |
 | `[target_harness]` | 必須 | `name`（非空文字列）、`version`（1以上の整数）、`setup`（任意の非空文字列配列）、`required_skills` / `required_mcp`（任意の必須スキル・必須 MCP サーバー一覧）。 |
 | `[spec]` | 必須 | `paths`（1件以上のリポジトリ相対パス、親参照 `..` 禁止）、`approval_branch`（既定 `"main"`）。 |
-| `[delegation]` | 必須 | `mode` は `observe_only` / `propose_pr` / `auto_merge`。`max_retries`（0以上の整数、**フロー全体での累計再試行上限**）、`max_duration_sec`（正整数）、`max_cost_usd`（0以上の数値、**フロー1回あたりの累計コスト上限**）。`forbidden_paths` には実装上つねに `.garden/**` と `[spec].paths` 全件を強制追加する（記述漏れがあっても CLI が自動付与し除外不可）。 |
+| `[delegation]` | 必須 | `mode` は `observe_only` / `propose_pr` / `auto_merge`。`allowed_paths` は `propose_pr` と `auto_merge` で1件以上を必須とし、`observe_only` では省略または空配列を許容する。`max_retries`（0以上の整数、**フロー全体での累計再試行上限**）、`max_duration_sec`（正整数）、`max_cost_usd`（0以上の数値、**フロー1回あたりの累計コスト上限**）。`forbidden_paths` には実装上つねに `.garden/**` と `[spec].paths` 全件を強制追加する（記述漏れがあっても CLI が自動付与し除外不可）。 |
 | `[checks.<name>]` | 1件以上 | `command` は非空文字列配列。`kind` は `"check"` または `"formal_check"`。`status` は `"active"` または `"proposed"`（既定 `"active"`）。`formal_check` では `tool`・`model_path`・`invariants` を必須とする。 |
 | `[agents.<name>]` | 任意（`agent` ステップ利用時は必須） | `adapter` は `"codex"` / `"claude"` / `"antigravity"` / `"custom"` / `"mock"`。`command` は非空文字列配列。`timeout_sec`（正整数）。`max_cost_usd`（任意、**1回のエージェント呼び出しあたりの上限**。実効上限は `min(agent.max_cost_usd, remaining_flow_budget)`）。 |
 | `[flows.<name>]` | 1件以上 | `scope` は `"flow_checks"`（既定）または `"all_specs"`。`steps` は1件以上。各 `step.id` はフロー内で一意。参照する `check` / `agent` / `fix_step` / `gate.require_checks` がすべて実在すること。ステップ属性の制約は直下の表を参照。 |
@@ -315,7 +317,9 @@ kind = "auto"
 `[flows.<name>.delegation]` でデフォルト `[delegation]` を上書きするとき、バリデーターは次の順序関係に違反する緩和をすべてエラーで弾きます。
 
 - `mode`: `observe_only (0) < propose_pr (1) < auto_merge (2)` とし、`flow.mode <= default.mode` であること。
-- `allowed_paths`: フロー側の指定はデフォルト `allowed_paths` の部分集合（または同一・空）であること。`mode == "observe_only"` で非空の `allowed_paths` を明示すると設定エラー（終了コード `2`）とし、フロー上書きで省略した場合のみ空集合として扱う。
+- `allowed_paths`
+  - フローのモードが `propose_pr` または `auto_merge` の場合、省略時はデフォルトのリストを継承する。明示する場合はデフォルトのリストの非空の部分集合とし、空配列は設定エラー（終了コード `2`）とする。
+  - フローのモードが `observe_only` の場合、省略または空配列の指定で許可パスを空にする。非空の指定は設定エラー（終了コード `2`）とする。
 - `forbidden_paths`: デフォルトとの和集合をとる（削除不可、追加のみ）。
 - `max_retries`, `max_duration_sec`, `max_cost_usd`: すべて `flow.value <= default.value` であること。
 - `require_checks`: デフォルトの必須チェックを削除できない（追加のみ）。
@@ -424,7 +428,18 @@ stateDiagram-v2
 - **Run ID**: `<YYYYMMDDTHHMMSSZ>-<idempotency_key[:8]>`（例: `20261123T084500Z-a1b2c3d4`）。
 - **重複実行の防止（CI・ローカルで統一）**:
   - **スキップ条件（共通）**: 同一 `idempotency_key` かつ終端判定が **`SATISFIED`** の実行記録がすでに存在する場合のみ重複としてスキップします（`--force` 指定時のみ再実行可）。`INCONCLUSIVE` / `UNSATISFIED` / `NEEDS_HUMAN` / `ABORTED` の記録は、環境復旧や修正後の再試行を妨げないためスキップしません。
-  - **GitHub Actions**: ワークフロー側で対象リポジトリおよび Issue/PR 単位の `concurrency: { group: "garden-${{ github.repository }}-${{ inputs.issue_number || github.event.pull_request.number || github.ref }}", cancel-in-progress: false }` を設定し、同一 PR に対する `auto` と `/garden resume` の並行実行によるラベル競合を防ぐ。実行前には Issue/PR の HTML マーカー（`idempotency_key=... verdict=SATISFIED`）を照合して重複をスキップする。
+  - **GitHub Actions** は対象リポジトリと Issue/PR 単位で同時実行を制御し、同一 PR の `auto` と `/garden resume` のラベル更新が重ならないようにする。
+
+    ```yaml
+    concurrency:
+      group: "garden-${{ github.repository }}-${{ inputs.issue_number || github.event.pull_request.number || github.ref }}"
+      cancel-in-progress: false
+      queue: max
+    ```
+
+    `queue: max` で、待機中の PR 検証が後から来た `/garden resume` によって取り消されるのを防ぐ。待機枠は最大 100 件で、上限に達すると新たにキューに入るジョブはキャンセルされる。[GitHub Actions の同時実行制御](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+
+    実行前には Issue/PR の HTML マーカー（`idempotency_key=... verdict=SATISFIED`）を照合して重複をスキップする。
   - **ローカル実行**: `.garden/runs/` 内の既存 `run.json` から同一 `idempotency_key` かつ `verdict == "SATISFIED"` の記録を照合します。作業ツリー汚染を防ぐため、`git worktree add --detach .garden/worktrees/<run-id> <target_commit>`（修正フローでは `git worktree add -b garden/<run-id> .garden/worktrees/<run-id> <target_commit>`）で隔離実行し、終了時に削除します（`--keep-worktree` で調査用に残せます）。
 
 ### 4.3 2層の決定論的判定ルール（`checks.py`）
@@ -568,7 +583,7 @@ CLI は `response.json` の `changed_files` を信頼せず、必ずワークツ
 上記の全変更・未追跡ファイル集合に対して次を判定します。
 - `mode == "observe_only"` なのに変更・未追跡ファイルが 1 件以上ある場合は違反とする。
 - いずれかのパスが `forbidden_paths` に一致する場合は違反とする。
-- `allowed_paths` が空でないのに、いずれにも一致しないパスがある場合は違反とする。
+- `propose_pr` と `auto_merge` では、`allowed_paths` のどのパターンにも一致しないパスがある場合は違反とする。
 - 1 回のエージェント呼び出しの `cost_usd > min(agent.max_cost_usd, remaining_flow_budget)`、またはフロー累計 `cost_usd > delegation.max_cost_usd`、またはフロー経過時間 `> delegation.max_duration_sec` の場合は上限超過とする。
 
 違反・超過時は、許可外の差分を自動反映や PR 作成に進めず、`NEEDS_HUMAN` として証拠を残します。
