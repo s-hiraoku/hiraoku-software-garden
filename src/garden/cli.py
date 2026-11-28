@@ -98,7 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     doc_cmd.add_argument("--target", type=Path, default=Path.cwd())
     doc_cmd.add_argument("--approval-branch", default="main")
     doc_cmd.add_argument("--json", action="store_true", dest="as_json")
-    doc_cmd.add_argument("--skip-network", action="store_true")
+    doc_cmd.add_argument(
+        "--skip-network",
+        action="store_true",
+        help="skip remote GitHub branch protection API check (does not disable --probe-mcp)",
+    )
     doc_cmd.add_argument(
         "--strict-harness",
         action="store_true",
@@ -108,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-mcp",
         action="store_true",
         help="perform live connectivity/initialize probes against configured required MCP servers",
+    )
+    doc_cmd.add_argument(
+        "--trust-project-mcp",
+        action="store_true",
+        help="explicitly approve launching stdio MCP commands defined in project-local config files during --probe-mcp",
     )
 
     har_cmd = commands.add_parser(
@@ -128,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     har_guide.add_argument("--strict-harness", action="store_true")
     har_guide.add_argument("--probe-mcp", action="store_true")
+    har_guide.add_argument(
+        "--trust-project-mcp",
+        action="store_true",
+        help="explicitly approve launching stdio MCP commands defined in project-local config files during --probe-mcp",
+    )
     har_guide.add_argument("--json", action="store_true", dest="as_json")
 
     har_sync = har_sub.add_parser(
@@ -136,13 +150,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     har_sync.add_argument(
         "--adapter",
-        choices=tuple(sorted(PSTACK_SYNC_ADAPTERS)),
+        choices=("auto", *sorted(PSTACK_SYNC_ADAPTERS)),
         default="antigravity",
     )
     har_sync.add_argument("--dest", type=Path, default=None)
     har_sync.add_argument("--target", type=Path, default=Path.cwd())
+    har_sync.add_argument(
+        "--approval-branch",
+        default=None,
+        help="verify target's approved [common_harness].ref on this branch matches nursery pinned_ref",
+    )
+    har_sync.add_argument(
+        "--flow",
+        default=None,
+        help="flow name (or 'auto') to scope --adapter auto to the executed flow's adapters",
+    )
+    har_sync.add_argument("--trigger-event", default="manual")
+    har_sync.add_argument("--trigger-action", default=None)
+    har_sync.add_argument("--trigger-label", default=None)
     har_sync.add_argument("--source", default=None)
     har_sync.add_argument("--apply", action="store_true")
+    har_sync.add_argument(
+        "--force",
+        action="store_true",
+        help="allow replacing pre-existing unmanaged skill directories with colliding names",
+    )
     har_sync.add_argument("--json", action="store_true", dest="as_json")
 
     upg_cmd = commands.add_parser("upgrade", help="plan or apply a template upgrade safely")
@@ -326,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             approval_branch=args.approval_branch,
             strict_harness=args.strict_harness,
             probe_mcp=args.probe_mcp,
+            trust_project_mcp=args.trust_project_mcp,
         )
         if args.as_json:
             print(
@@ -348,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                     adapter=args.adapter,
                     strict_harness=args.strict_harness,
                     probe_mcp=args.probe_mcp,
+                    trust_project_mcp=args.trust_project_mcp,
                 )
                 if args.as_json:
                     print(json.dumps(guide, ensure_ascii=False, indent=2))
@@ -359,16 +393,24 @@ def main(argv: list[str] | None = None) -> int:
                     adapter=args.adapter,
                     dest=args.dest,
                     target_root=args.target,
+                    approval_branch=args.approval_branch,
+                    flow=args.flow,
+                    trigger_event=args.trigger_event,
+                    trigger_action=args.trigger_action,
+                    trigger_label=args.trigger_label,
                     source=args.source,
                     apply=args.apply,
+                    force=args.force,
                 )
                 if args.as_json:
                     print(json.dumps(synced, ensure_ascii=False, indent=2))
                 else:
                     mode = "APPLIED" if synced["applied"] else "DRY-RUN"
+                    dests = ", ".join(
+                        f"{d['adapter']}->{d['dest']}" for d in synced["destinations"]
+                    )
                     print(
-                        f"[{mode}] pstack@{synced['pinned_ref'][:12]} -> {synced['dest']} "
-                        f"(adapter={synced['adapter']}, layout={synced['layout']})"
+                        f"[{mode}] pstack@{synced['pinned_ref'][:12]} ({dests})"
                     )
                     if not synced["applied"]:
                         print("Pass --apply to fetch and install the pinned pstack revision.")

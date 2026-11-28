@@ -48,7 +48,7 @@ on:
         type: string
         default: ""
       sync_pstack:
-        description: "Synchronize pinned pstack skills into ~/.agents/skills before running the Garden flow (enable for real-agent or pstack-requiring flows on CI)"
+        description: "Synchronize pinned pstack skills into the active adapter skill directory (verified against approved [common_harness].ref) before running the Garden flow"
         required: false
         type: boolean
         default: false
@@ -142,11 +142,25 @@ jobs:
 
       - name: Sync pinned pstack common harness
         if: inputs.sync_pstack
+        env:
+          APPROVAL_BRANCH: ${{ inputs.approval_branch }}
+          FLOW_NAME: ${{ inputs.flow }}
+          TRIGGER_ACTION: ${{ github.event.action }}
         run: |
-          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" harness sync-pstack \
-            --adapter codex \
-            --apply \
+          SYNC_ARGS=(
+            python3 "${RUNNER_TEMP}/garden-nursery/garden.py" harness sync-pstack
+            --adapter auto
+            --target .
+            --approval-branch "${APPROVAL_BRANCH}"
+            --flow "${FLOW_NAME}"
+            --trigger-event "${GITHUB_EVENT_NAME}"
+            --apply
             --json
+          )
+          if [ -n "${TRIGGER_ACTION}" ]; then
+            SYNC_ARGS+=(--trigger-action "${TRIGGER_ACTION}")
+          fi
+          "${SYNC_ARGS[@]}"
 
       - name: Mark Issue / PR as garden:running
         if: inputs.issue_number != 0
