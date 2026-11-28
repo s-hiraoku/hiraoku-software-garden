@@ -55,8 +55,8 @@ Python 3.11 以上・標準ライブラリのみで動作する。モジュー�
 
 MVP-4 時点で意図的に割り切っている点と既知の制約をまとめる。各制約の解消手順と完了条件は [MVP 成長プラン](roadmap.md#4-今後の成長フェーズmvp-5mvp-8-と最終形) に記載している。
 
-1. **必須スキル・必須 MCP の未定義と pstack 手動導入（対応予定: MVP-6）**
-   MCP サーバーの宣言・検査は未実装であり、スキルも `harnesses/pstack.toml` の推奨定義にとどまる。現在の CLI は `.garden/garden.toml` の `required_skills` と `required_mcp` を読み飛ばすため、指定しても `garden doctor` や `garden run` の検査には反映されない。`[skills].core` も必須としては検査していない。`garden doctor` は pstack ディレクトリ未検出時も `warn` で通し、自動導入導線やエージェントプラグイン連携も未整備である。
+1. **pstack 自動導入・エージェントプラグイン統合とテンプレート別必須 MCP パターン（対応予定: MVP-6 後半）**
+   `.garden/garden.toml` の `required_skills`・`required_mcp` および `harnesses/pstack.toml` の `[skills].core`（実エージェント利用時・`--strict-harness` 時）の宣言・`garden doctor` 厳格検査・Preflight `INCONCLUSIVE` 停止は実装済みである。pstack の自動導入コマンド、エージェントプラグイン連携、および各テンプレート別の標準必須スキル・MCP 定義は MVP-6 後半で整える。
 2. **実対象リポジトリの既定モードは `observe_only`（対応予定: MVP-7）**
    全テンプレートと対象リポジトリの既定委譲モードを `observe_only` に固定している。実エージェントによる修正と `garden reflect` の PR 提案はハーネス標準化後に解放する。
    MVP-4 の事後ガードは、書き込み可能なモードで `allowed_paths` が空の場合に許可パスの照合を省く。書き込み範囲を絞るには非空のリストを指定する。フローで既定のリストを継承するときは `allowed_paths` を省略し、変更を禁止するときは `observe_only` を使う。

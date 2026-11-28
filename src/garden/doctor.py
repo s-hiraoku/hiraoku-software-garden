@@ -7,12 +7,16 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tomllib
 from typing import Any
 
 from garden.resources import nursery_root as _resolve_nursery_root
 from garden.definition import GARDEN_DEF_REL_PATH, DefinitionError, load_definition
 from garden.git_utils import GitError, list_remotes, repo_root
+from garden.harness import (
+    definition_uses_real_agent,
+    evaluate_harness_requirements,
+    load_pstack_manifest,
+)
 from garden.spec import verify_trust_anchor
 
 
@@ -33,17 +37,6 @@ class DiagnosticItem:
 
 def _nursery_root() -> Path:
     return _resolve_nursery_root()
-
-
-def _load_pstack_manifest(nursery_root: Path) -> dict[str, Any] | None:
-    manifest = nursery_root / "harnesses" / "pstack.toml"
-    if not manifest.is_file():
-        return None
-    try:
-        with manifest.open("rb") as f:
-            return tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
 
 
 def _check_branch_protection(
@@ -102,8 +95,9 @@ def run_doctor(
     nursery_root: Path | None = None,
     skip_network: bool = False,
     approval_branch: str = "main",
+    strict_harness: bool = False,
 ) -> tuple[int, list[DiagnosticItem]]:
-    """Run all 7 diagnostic checks. Returns (exit_code, items)."""
+    """Run all diagnostic checks. Returns (exit_code, items)."""
     items: list[DiagnosticItem] = []
     n_root = nursery_root or _nursery_root()
 
@@ -204,7 +198,7 @@ def run_doctor(
         )
 
     # 5. Common harness (pstack) manifest & environment check
-    manifest = _load_pstack_manifest(n_root)
+    manifest = load_pstack_manifest(nursery_root)
     search_paths = (
         (manifest.get("resolution") or {}).get("search_paths", [])
         if isinstance(manifest, dict)
@@ -247,6 +241,84 @@ def run_doctor(
                 id="common_harness",
                 status="warn",
                 detail=f"{definition.common_harness.name} not found in default search paths{hint}",
+            )
+        )
+
+    # 5b. Required skills & MCP servers verification (MVP-6)
+    enforce_core = strict_harness or definition_uses_real_agent(definition)
+    harness_eval = evaluate_harness_requirements(
+        root,
+        definition,
+        nursery_root=nursery_root,
+        enforce_core=enforce_core,
+        include_advisory_core=True,
+    )
+    if harness_eval.missing_skills:
+        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="error",
+                detail=f"missing required skill(s): {', '.join(harness_eval.missing_skills)}{hint_suffix}",
+            )
+        )
+    elif harness_eval.required_skills:
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="ok",
+                detail=f"all {len(harness_eval.required_skills)} required skill(s) verified",
+            )
+        )
+    elif harness_eval.missing_core_skills:
+        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="warn",
+                detail=f"pstack core skill(s) not detected in observe_only mode: {', '.join(harness_eval.missing_core_skills)}{hint_suffix}",
+            )
+        )
+    elif harness_eval.core_skills:
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="ok",
+                detail=f"all {len(harness_eval.core_skills)} pstack core skill(s) verified",
+            )
+        )
+    else:
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="ok",
+                detail="no required skills declared",
+            )
+        )
+
+    if harness_eval.missing_mcp:
+        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
+        items.append(
+            DiagnosticItem(
+                id="required_mcp",
+                status="error",
+                detail=f"missing required MCP server(s): {', '.join(harness_eval.missing_mcp)}{hint_suffix}",
+            )
+        )
+    elif harness_eval.required_mcp:
+        items.append(
+            DiagnosticItem(
+                id="required_mcp",
+                status="ok",
+                detail=f"all {len(harness_eval.required_mcp)} required MCP server(s) configured",
+            )
+        )
+    else:
+        items.append(
+            DiagnosticItem(
+                id="required_mcp",
+                status="ok",
+                detail="no required MCP servers declared",
             )
         )
 

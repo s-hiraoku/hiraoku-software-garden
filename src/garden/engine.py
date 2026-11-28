@@ -36,6 +36,7 @@ from garden.git_utils import (
     repo_root,
 )
 from garden.guard import snapshot_untracked_files, verify_post_agent_guard
+from garden.harness import evaluate_harness_requirements, flow_uses_real_agent
 from garden.report import fetch_github_issue_comments, find_satisfied_marker
 from garden.spec import TrustAnchorResult, verify_trust_anchor
 
@@ -566,6 +567,38 @@ def run_flow(
                 "kind": "escalation",
                 "reason": "spec_not_approved",
                 "detail": anchor.spec_failure_reason,
+            },
+            requested_report_kind="escalation",
+        )
+
+    # Preflight gate: missing required skills / MCP servers -> INCONCLUSIVE
+    harness_eval = evaluate_harness_requirements(
+        root,
+        definition,
+        enforce_core=flow_uses_real_agent(definition, flow),
+    )
+    if harness_eval.has_blocking_missing:
+        missing_parts: list[str] = []
+        if harness_eval.missing_skills:
+            missing_parts.append(
+                f"missing required skill(s): {', '.join(harness_eval.missing_skills)}"
+            )
+        if harness_eval.missing_mcp:
+            missing_parts.append(
+                f"missing required MCP server(s): {', '.join(harness_eval.missing_mcp)}"
+            )
+        if harness_eval.remedy_hints:
+            missing_parts.append(f"remedy: {'; '.join(harness_eval.remedy_hints)}")
+        return _finalize(
+            verdict="INCONCLUSIVE",
+            step_records=[],
+            criteria_results={},
+            retries_used=0,
+            usage_totals=usage_totals,
+            escalation={
+                "kind": "escalation",
+                "reason": "harness_requirements_missing",
+                "detail": "; ".join(missing_parts),
             },
             requested_report_kind="escalation",
         )

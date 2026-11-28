@@ -47,6 +47,7 @@ class CommonHarnessConfig:
     name: str
     ref: str
     skills: tuple[str, ...] = ()
+    required_skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class TargetHarnessConfig:
     name: str
     version: int
     setup: tuple[str, ...] = ()
+    required_skills: tuple[str, ...] = ()
+    required_mcp: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -393,7 +396,17 @@ def load_definition_bytes(raw: bytes, source: str = GARDEN_DEF_REL_PATH) -> Gard
     ch_skills = _dedupe_preserve(
         _validate_str_list(ch_tbl.get("skills", []), "common_harness.skills")
     )
-    common_harness = CommonHarnessConfig(name=ch_name, ref=ch_ref, skills=ch_skills)
+    ch_required_skills = _dedupe_preserve(
+        _validate_str_list(
+            ch_tbl.get("required_skills", []), "common_harness.required_skills"
+        )
+    )
+    common_harness = CommonHarnessConfig(
+        name=ch_name,
+        ref=ch_ref,
+        skills=ch_skills,
+        required_skills=ch_required_skills,
+    )
 
     th_tbl = _require_table(data, "target_harness")
     th_setup = (
@@ -401,10 +414,22 @@ def load_definition_bytes(raw: bytes, source: str = GARDEN_DEF_REL_PATH) -> Gard
         if "setup" in th_tbl
         else ()
     )
+    th_required_skills = _dedupe_preserve(
+        _validate_str_list(
+            th_tbl.get("required_skills", []), "target_harness.required_skills"
+        )
+    )
+    th_required_mcp = _dedupe_preserve(
+        _validate_str_list(
+            th_tbl.get("required_mcp", []), "target_harness.required_mcp"
+        )
+    )
     target_harness = TargetHarnessConfig(
         name=_require_nonempty_str(th_tbl, "name", "target_harness"),
         version=_require_pos_int(th_tbl, "version", "target_harness"),
         setup=th_setup,
+        required_skills=th_required_skills,
+        required_mcp=th_required_mcp,
     )
 
     spec_tbl = _require_table(data, "spec")
