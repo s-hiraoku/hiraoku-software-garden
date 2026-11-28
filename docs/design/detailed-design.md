@@ -924,8 +924,8 @@ search_paths = [
 | カタログ（既存互換） | `garden check <repo-id>...` | カタログ登録済みチェックを実行し JSON 出力 | `0` 全合格 / `1` failed・unavailable あり / `2` 引数・設定不正 |
 | カタログ | `garden register <target> [--id ID] [--remote URL] [--description DESC] [--check CMD...] [--force]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録 | `0` 成功 / `2` 入力・競合エラー |
 | 導入・保守 | `garden init [--target PATH] [--type TYPE] [--version N] [--nursery-ref REF] [--with-standard-harness] [--force]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
-| 導入・保守 | `garden doctor [--target PATH] [--approval-branch BRANCH] [--skip-network] [--strict-harness] [--probe-mcp] [--json]` | 環境・定義・承認仕様・pstack・必須スキル/MCP（任意で実接続確認）・チェック依存を診断 | `0` error なし / `1` error あり / `2` Git 異常・定義読込不可 |
-| 導入・保守 | `garden harness guide\|sync-pstack [OPTIONS]` | 不足スキル・MCP の環境別導入ガイド出力、および固定 SHA 版 pstack の検証付き同期（既定ドライラン） | `0` 充足・成功 / `1` 不足・同期失敗 / `2` 入力・定義不正 |
+| 導入・保守 | `garden doctor [--target PATH] [--approval-branch BRANCH] [--skip-network] [--strict-harness] [--probe-mcp] [--trust-project-mcp] [--json]` | 環境・定義・承認仕様・pstack・必須スキル/MCP（任意で実接続確認）・チェック依存を診断（`--skip-network` は GitHub ブランチ保護 API のみ省略） | `0` error なし / `1` error あり / `2` Git 異常・定義読込不可 |
+| 導入・保守 | `garden harness guide\|sync-pstack [OPTIONS]` | 不足スキル・MCP の環境別導入ガイド出力、および固定 SHA 版 pstack の承認版照合・検証付き同期（既定ドライラン） | `0` 充足・成功 / `1` 不足・同期失敗 / `2` 入力・定義不正 |
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
 | 導入・保守 | `garden spec-diff [--target PATH] [--base REF] [--head REF]` | 承認済み仕様との条件単位差分（追加・削除・変更）と影響チェック・フローを解析 | `0` 整合 / `1` ガーデン更新要（未カバー追加・孤立チェック） / `2` 入力不正 |
 | 導入・保守 | `garden template-gate (--type TYPE \| --all) [--version N] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |

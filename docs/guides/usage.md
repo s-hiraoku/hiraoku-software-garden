@@ -76,7 +76,7 @@ garden init --target path/to/your-repo --nursery-ref <commit-sha-or-tag>
 garden doctor --target path/to/your-repo
 ```
 
-Git の状態、ガーデン定義の妥当性、承認済み仕様の有無、チェックコマンドを起動できるか、pstack の導入状況、`.garden/.gitignore`、承認ブランチの保護を確認します。`error` が一つでもあると終了コード `1`、Git 異常や定義読込不可では終了コード `2` を返します。ネットワークを使わずに確かめるときは `--skip-network`、機械で読むときは `--json` を付けます。
+Git の状態、ガーデン定義の妥当性、承認済み仕様の有無、チェックコマンドを起動できるか、pstack の導入状況、`.garden/.gitignore`、承認ブランチの保護を確認します。`error` が一つでもあると終了コード `1`、Git 異常や定義読込不可では終了コード `2` を返します。リモートのブランチ保護確認を省くときは `--skip-network`（`--probe-mcp` の MCP 実接続確認は無効化しません）、機械で読むときは `--json` を付けます。
 
 ### 手順 4: 手元でフローを実行する
 

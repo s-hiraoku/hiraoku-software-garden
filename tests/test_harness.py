@@ -6,9 +6,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import queue
+import stat
 import sys
 import tempfile
 import threading
+import time
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -830,7 +834,7 @@ core = [
                 guide = build_harness_guide(repo, adapter="all")
                 self.assertFalse(guide["status"]["ok"])
                 self.assertIn("playwright", guide["status"]["missing_mcp"])
-                self.assertIn("[mcp_servers.playwright]", guide["environments"]["codex"]["mcp_snippet"])
+                self.assertIn('[mcp_servers."playwright"]', guide["environments"]["codex"]["mcp_snippet"])
                 self.assertIn("@playwright/mcp@latest", guide["environments"]["antigravity"]["mcp_snippet"])
                 md = format_harness_guide_markdown(guide)
                 self.assertIn("garden harness sync-pstack --adapter codex --apply", md)
@@ -841,3 +845,524 @@ core = [
             out = json.loads(proc.stdout)
             self.assertFalse(out["applied"])
             self.assertEqual(out["adapter"], "codex")
+
+    def test_project_stdio_mcp_requires_explicit_trust_before_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake_home = base / "home"
+            fake_home.mkdir()
+            repo = _make_garden_repo(
+                base / "proj",
+                spec_status="draft",
+                target_required_mcp=["local_tool"],
+            )
+            marker = base / "executed.txt"
+            probe_script = base / "touch_and_init.py"
+            probe_script.write_text(
+                f"import json, pathlib, sys\n"
+                f"pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n"
+                f"req = json.loads(sys.stdin.readline())\n"
+                f"print(json.dumps({{'jsonrpc': '2.0', 'id': req['id'], 'result': {{}}}}), flush=True)\n",
+                encoding="utf-8",
+            )
+            (repo / ".mcp.json").write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "local_tool": {
+                                "command": sys.executable,
+                                "args": [str(probe_script)],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commit_all(repo, "add project mcp")
+
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+            with patch.dict(os.environ, clean_env, clear=True):
+                code, items = run_doctor(repo, skip_network=True, probe_mcp=True)
+                self.assertEqual(code, 1)
+                self.assertIn(
+                    "--trust-project-mcp",
+                    {i.id: i for i in items}["required_mcp"].detail,
+                )
+                self.assertFalse(marker.exists(), "untrusted project stdio MCP must not execute")
+
+                guide = build_harness_guide(repo, adapter="antigravity", probe_mcp=True)
+                self.assertFalse(guide["status"]["ok"])
+                self.assertIn("local_tool", guide["status"]["mcp_probe_errors"])
+                self.assertFalse(marker.exists())
+
+                # Explicit opt-in executes and succeeds
+                guide_ok = build_harness_guide(
+                    repo,
+                    adapter="antigravity",
+                    probe_mcp=True,
+                    trust_project_mcp=True,
+                )
+                self.assertTrue(guide_ok["status"]["ok"], guide_ok["status"])
+                self.assertTrue(marker.exists())
+
+    def test_http_mcp_probe_multiline_json_sse_legacy_redirect_and_codex_auth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(base / "proj")
+
+            # Server B: cross-origin redirect target that records headers it received
+            seen_target_headers: dict[str, str] = {}
+
+            class _TargetHandler(BaseHTTPRequestHandler):
+                def log_message(self, format: str, *args: object) -> None:
+                    return
+
+                def do_GET(self) -> None:
+                    seen_target_headers.clear()
+                    for k, v in self.headers.items():
+                        seen_target_headers[k.lower()] = v
+                    body = json.dumps(
+                        {"jsonrpc": "2.0", "id": 1, "result": {}},
+                        indent=2,
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def do_POST(self) -> None:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    req = json.loads(self.rfile.read(length).decode("utf-8"))
+                    seen_target_headers.clear()
+                    for k, v in self.headers.items():
+                        seen_target_headers[k.lower()] = v
+                    body = json.dumps(
+                        {"jsonrpc": "2.0", "id": req["id"], "result": {}},
+                        indent=2,
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            srv_b = ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+            port_b = srv_b.server_address[1]
+            threading.Thread(target=srv_b.serve_forever, daemon=True).start()
+
+            legacy_queue: queue.Queue[str] = queue.Queue()
+
+            class _PrimaryHandler(BaseHTTPRequestHandler):
+                def log_message(self, format: str, *args: object) -> None:
+                    return
+
+                def do_POST(self) -> None:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw = self.rfile.read(length).decode("utf-8")
+                    if self.path == "/pretty-auth":
+                        if (
+                            self.headers.get("Authorization") != "Bearer secret-tok"
+                            or self.headers.get("X-Static") != "s1"
+                            or self.headers.get("X-From-Env") != "e1"
+                        ):
+                            self.send_response(401)
+                            self.end_headers()
+                            return
+                        req = json.loads(raw)
+                        body = json.dumps(
+                            {"jsonrpc": "2.0", "id": req["id"], "result": {"ok": True}},
+                            indent=2,
+                        ).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    if self.path == "/sse-open":
+                        req = json.loads(raw)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.end_headers()
+                        ev = (
+                            "event: message\n"
+                            f"data: {json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': {}})}\n\n"
+                        )
+                        self.wfile.write(ev.encode("utf-8"))
+                        self.wfile.flush()
+                        # Keep stream open past test check to ensure incremental parsing
+                        time.sleep(2.0)
+                        return
+                    if self.path == "/redirect-cross-origin":
+                        self.send_response(302)
+                        self.send_header("Location", f"http://127.0.0.1:{port_b}/dst")
+                        self.end_headers()
+                        return
+                    if self.path == "/redirect-get-405":
+                        self.send_response(405)
+                        self.end_headers()
+                        return
+                    if self.path in ("/html-405", "/legacy-sse"):
+                        self.send_response(405)
+                        self.end_headers()
+                        return
+                    if self.path == "/legacy-msg":
+                        req = json.loads(raw)
+                        legacy_queue.put(
+                            json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+                        )
+                        self.send_response(202)
+                        self.end_headers()
+                        return
+                    self.send_response(404)
+                    self.end_headers()
+
+                def do_GET(self) -> None:
+                    if self.path == "/redirect-get-405":
+                        self.send_response(307)
+                        self.send_header("Location", f"http://127.0.0.1:{port_b}/dst")
+                        self.end_headers()
+                        return
+                    if self.path == "/html-405":
+                        body = b"<html><body>Not an MCP server</body></html>"
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    if self.path == "/legacy-sse":
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.end_headers()
+                        self.wfile.write(b"event: endpoint\ndata: /legacy-msg\n\n")
+                        self.wfile.flush()
+                        try:
+                            msg = legacy_queue.get(timeout=3.0)
+                            self.wfile.write(f"event: message\ndata: {msg}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                        except queue.Empty:
+                            pass
+                        return
+                    self.send_response(404)
+                    self.end_headers()
+
+            srv_a = ThreadingHTTPServer(("127.0.0.1", 0), _PrimaryHandler)
+            port_a = srv_a.server_address[1]
+            threading.Thread(target=srv_a.serve_forever, daemon=True).start()
+            try:
+                # 1. Multiline pretty JSON + Codex auth fields
+                with patch.dict(
+                    os.environ,
+                    {"MY_MCP_TOKEN": "secret-tok", "MY_ENV_HDR": "e1"},
+                ):
+                    ok_auth, msg_auth = probe_mcp_server(
+                        {
+                            "url": f"http://127.0.0.1:{port_a}/pretty-auth",
+                            "bearer_token_env_var": "MY_MCP_TOKEN",
+                            "http_headers": {"X-Static": "s1"},
+                            "env_http_headers": {"X-From-Env": "MY_ENV_HDR"},
+                        },
+                        repo,
+                    )
+                    self.assertTrue(ok_auth, msg_auth)
+
+                # Missing env var for Codex bearer token fails before sending
+                ok_missing_env, msg_missing_env = probe_mcp_server(
+                    {
+                        "url": f"http://127.0.0.1:{port_a}/pretty-auth",
+                        "bearer_token_env_var": "UNSET_MCP_TOKEN_XYZ",
+                    },
+                    repo,
+                )
+                self.assertFalse(ok_missing_env)
+                self.assertIn("UNSET_MCP_TOKEN_XYZ", msg_missing_env)
+
+                # 2. Open-ended SSE stream returns promptly on initialize event
+                t0 = time.monotonic()
+                ok_sse, msg_sse = probe_mcp_server(
+                    {"url": f"http://127.0.0.1:{port_a}/sse-open"},
+                    repo,
+                    timeout_sec=1.2,
+                )
+                elapsed = time.monotonic() - t0
+                self.assertTrue(ok_sse, msg_sse)
+                self.assertLess(elapsed, 1.0)
+
+                # 3. Cross-origin redirect strips Authorization and configured custom headers (POST 302 & 405->GET 307)
+                ok_redir, msg_redir = probe_mcp_server(
+                    {
+                        "url": f"http://127.0.0.1:{port_a}/redirect-cross-origin",
+                        "headers": {
+                            "Authorization": "Bearer leak-me-not",
+                            "X-Api-Key": "top-secret",
+                        },
+                    },
+                    repo,
+                )
+                self.assertTrue(ok_redir, msg_redir)
+                self.assertTrue(seen_target_headers)
+                self.assertNotIn("authorization", seen_target_headers)
+                self.assertNotIn("x-api-key", seen_target_headers)
+
+                seen_target_headers.clear()
+                ok_get_redir, _ = probe_mcp_server(
+                    {
+                        "url": f"http://127.0.0.1:{port_a}/redirect-get-405",
+                        "headers": {
+                            "Authorization": "Bearer leak-me-not-get",
+                            "X-Api-Key": "top-secret-get",
+                        },
+                    },
+                    repo,
+                )
+                self.assertFalse(ok_get_redir)  # target returns JSON, not SSE stream
+                self.assertTrue(seen_target_headers)
+                self.assertNotIn("authorization", seen_target_headers)
+                self.assertNotIn("x-api-key", seen_target_headers)
+
+                # 4. POST 405 -> GET 200 HTML page is REJECTED
+                ok_html, msg_html = probe_mcp_server(
+                    {"url": f"http://127.0.0.1:{port_a}/html-405"}, repo
+                )
+                self.assertFalse(ok_html)
+                self.assertIn("text/event-stream", msg_html)
+
+                # 5. Full legacy HTTP+SSE handshake (405 -> GET endpoint -> POST 202 -> SSE result)
+                ok_legacy, msg_legacy = probe_mcp_server(
+                    {"url": f"http://127.0.0.1:{port_a}/legacy-sse"},
+                    repo,
+                    timeout_sec=3.0,
+                )
+                self.assertTrue(ok_legacy, msg_legacy)
+            finally:
+                srv_a.shutdown()
+                srv_a.server_close()
+                srv_b.shutdown()
+                srv_b.server_close()
+
+    def test_stdio_probe_uses_configured_env_path_and_bounds_descendant_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(base / "proj")
+            custom_bin = base / "custom-bin"
+            custom_bin.mkdir()
+            exe = custom_bin / "my-custom-mcp-srv"
+            exe.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "req = json.loads(sys.stdin.readline())\n"
+                "print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': {}}), flush=True)\n",
+                encoding="utf-8",
+            )
+            exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+
+            ok_path, msg_path = probe_mcp_server(
+                {"command": "my-custom-mcp-srv", "env": {"PATH": str(custom_bin)}},
+                repo,
+            )
+            self.assertTrue(ok_path, msg_path)
+
+            # Launcher spawns a sleeping child inheriting pipes -> must terminate promptly
+            launcher = base / "hang_launcher.py"
+            launcher.write_text(
+                "import subprocess, sys, time\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+            t0 = time.monotonic()
+            ok_hang, msg_hang = probe_mcp_server(
+                {"command": sys.executable, "args": [str(launcher)]},
+                repo,
+                timeout_sec=0.3,
+            )
+            elapsed = time.monotonic() - t0
+            self.assertFalse(ok_hang)
+            self.assertIn("timed out", msg_hang)
+            self.assertLess(elapsed, 2.5)
+
+    def test_schema_dir_spoofing_rejected_and_dotted_codex_toml_key_quoted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(
+                base / "proj", target_required_mcp=["browser.prod"]
+            )
+            spoof = base / "spoof.mcp.json"
+            spoof.write_text(
+                json.dumps({"mcpServers": {"browser.prod": {"_schema_dir": "/tmp"}}}),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(spoof)}):
+                found = discover_configured_mcp_servers(repo)
+                self.assertNotIn("browser.prod", found)
+
+                guide = build_harness_guide(repo, adapter="codex")
+                snippet = guide["environments"]["codex"]["mcp_snippet"]
+                parsed = tomllib.loads(snippet)
+                self.assertIn("browser.prod", parsed["mcp_servers"])
+
+    def test_sync_pstack_symlink_rejection_custom_preservation_rollback_and_adapter_auto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            upstream_repo = init_target_repo(base / "upstream-pstack")
+            for core in (
+                "poteto-mode",
+                "correct",
+                "create-verification-skill",
+                "maintain-verification-skill",
+            ):
+                _write_skill(upstream_repo / "pstack", core, nested=True)
+            commit_all(upstream_repo, "add pstack")
+            pinned_sha = head_commit(upstream_repo)
+
+            nursery = base / "nursery"
+            (nursery / "harnesses").mkdir(parents=True)
+            (nursery / "harnesses" / "pstack.toml").write_text(
+                f"""
+schema_version = 1
+name = "pstack"
+upstream = "{upstream_repo}"
+subpath = "pstack"
+pinned_ref = "{pinned_sha}"
+
+[skills]
+core = [
+  "poteto-mode",
+  "correct",
+  "create-verification-skill",
+  "maintain-verification-skill",
+]
+""",
+                encoding="utf-8",
+            )
+
+            # 1. Symlink destination must be rejected in BOTH dry-run and apply
+            real_checkout = base / "real-dev-pstack"
+            real_checkout.mkdir()
+            sentinel = real_checkout / "local-work.txt"
+            sentinel.write_text("do not delete", encoding="utf-8")
+            sym_dest = base / "pstack-symlink"
+            sym_dest.symlink_to(real_checkout)
+            for do_apply in (False, True):
+                with self.assertRaises(ValueError):
+                    sync_pstack(
+                        adapter="antigravity",
+                        dest=sym_dest,
+                        apply=do_apply,
+                        nursery_root=nursery,
+                    )
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "do not delete")
+
+            # 2. Plugin layout preserves existing non-conflicting custom skills
+            plugin_dest = base / "plugin-dest"
+            custom_plugin_skill = _write_skill(plugin_dest, "local-extra-skill", nested=True)
+            sync_pstack(
+                adapter="antigravity",
+                dest=plugin_dest,
+                apply=True,
+                nursery_root=nursery,
+            )
+            self.assertTrue(custom_plugin_skill.is_file())
+            self.assertTrue((plugin_dest / "skills" / "poteto-mode" / "SKILL.md").is_file())
+
+            # 3. Shared skills_dir refuses to overwrite unmanaged colliding skill without --force
+            shared_dest = base / "shared-skills"
+            unmanaged = _write_skill(shared_dest, "poteto-mode")
+            unmanaged.write_text("custom unmanaged content", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                sync_pstack(
+                    adapter="codex",
+                    dest=shared_dest,
+                    apply=True,
+                    nursery_root=nursery,
+                )
+            self.assertEqual(unmanaged.read_text(encoding="utf-8"), "custom unmanaged content")
+
+            # With --force, replaces and marks managed; subsequent sync succeeds without --force
+            sync_pstack(
+                adapter="codex",
+                dest=shared_dest,
+                apply=True,
+                force=True,
+                nursery_root=nursery,
+            )
+            self.assertTrue((shared_dest / "poteto-mode" / ".garden-pstack-ref").is_file())
+            sync_pstack(
+                adapter="codex",
+                dest=shared_dest,
+                apply=True,
+                force=False,
+                nursery_root=nursery,
+            )
+
+            # 4. Approved [common_harness].ref mismatch is rejected, and --adapter auto targets claude
+            claude_repo = _make_garden_repo(base / "claude-proj", with_real_agent=True)
+            gpath = claude_repo / ".garden" / "garden.toml"
+            gpath.write_text(
+                gpath.read_text(encoding="utf-8").replace(
+                    'adapter = "codex"', 'adapter = "claude"'
+                ),
+                encoding="utf-8",
+            )
+            commit_all(claude_repo, "switch to claude adapter")
+
+            # Mismatched ref (PSTACK_SHA != pinned_sha) -> rejected!
+            with self.assertRaises(ValueError):
+                sync_pstack(
+                    adapter="auto",
+                    target_root=claude_repo,
+                    approval_branch="main",
+                    apply=False,
+                    nursery_root=nursery,
+                )
+
+            # Align approved ref -> --adapter auto resolves to claude (~/.claude/skills)
+            gpath.write_text(
+                gpath.read_text(encoding="utf-8").replace(PSTACK_SHA, pinned_sha),
+                encoding="utf-8",
+            )
+            commit_all(claude_repo, "align pstack ref")
+
+            fake_home = base / "fake-home"
+            fake_home.mkdir()
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+            with patch.dict(os.environ, clean_env, clear=True):
+                # Putting skills only in Codex ~/.agents/skills must NOT satisfy Claude flow
+                for core in (
+                    "poteto-mode",
+                    "correct",
+                    "create-verification-skill",
+                    "maintain-verification-skill",
+                ):
+                    _write_skill(fake_home / ".agents" / "skills", core)
+                code_before, _ = run_doctor(
+                    claude_repo, skip_network=True, nursery_root=nursery
+                )
+                self.assertEqual(code_before, 1)
+
+                # --adapter auto installs to ~/.claude/skills and Claude doctor passes
+                auto_res = sync_pstack(
+                    adapter="auto",
+                    target_root=claude_repo,
+                    approval_branch="main",
+                    apply=True,
+                    nursery_root=nursery,
+                )
+                self.assertEqual(auto_res["resolved_adapters"], ["claude"])
+                self.assertTrue((fake_home / ".claude" / "skills" / "poteto-mode" / "SKILL.md").is_file())
+                code_after, items_after = run_doctor(
+                    claude_repo, skip_network=True, nursery_root=nursery
+                )
+                self.assertEqual(code_after, 0, [i.to_dict() for i in items_after])

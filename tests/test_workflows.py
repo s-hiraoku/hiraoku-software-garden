@@ -103,6 +103,8 @@ class WorkflowYamlTests(unittest.TestCase):
         self.assertIn("node_version_file:", text)
         self.assertIn("sync_pstack:", text)
         self.assertIn("harness sync-pstack", text)
+        self.assertIn("--adapter auto", text)
+        self.assertIn('--approval-branch "${APPROVAL_BRANCH}"', text)
         self.assertIn("uses: actions/setup-node@v4", text)
         self.assertIn("node-version: ${{ inputs.node_version }}", text)
         self.assertIn("node-version-file: ${{ inputs.node_version_file }}", text)

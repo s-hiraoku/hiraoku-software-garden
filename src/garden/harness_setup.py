@@ -9,8 +9,14 @@ import subprocess
 import tempfile
 from typing import Any
 
-from garden.definition import GARDEN_DEF_REL_PATH, SHA40_RE, load_definition
-from garden.git_utils import GitError, repo_root
+from garden.definition import (
+    GARDEN_DEF_REL_PATH,
+    SHA40_RE,
+    GardenDefinition,
+    load_definition,
+    load_definition_bytes,
+)
+from garden.git_utils import GitError, read_file_at, repo_root, resolve_branch_commit
 from garden.harness import (
     ADAPTER_MCP_HINTS,
     definition_real_adapters,
@@ -30,6 +36,7 @@ PSTACK_SYNC_ADAPTERS: dict[str, tuple[str, str]] = {
 }
 
 GUIDE_ADAPTERS: tuple[str, ...] = ("antigravity", "cursor", "claude", "codex")
+MANAGED_MARKER_FILENAME = ".garden-pstack-ref"
 
 KNOWN_MCP_SNIPPETS: dict[str, dict[str, Any]] = {
     "playwright": {
@@ -57,7 +64,7 @@ def _render_codex_toml_mcp_snippet(servers: tuple[str, ...]) -> str:
     lines: list[str] = []
     for name in servers:
         entry = _mcp_snippet_entry(name)
-        lines.append(f"[mcp_servers.{name}]")
+        lines.append(f"[mcp_servers.{json.dumps(name)}]")
         lines.append(f"command = {json.dumps(entry['command'])}")
         if entry.get("args"):
             lines.append(f"args = {json.dumps(entry['args'])}")
@@ -82,21 +89,43 @@ def _run_git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _normalize_without_following_final_symlink(path: Path) -> Path:
+    """Resolve parent directory while preserving the final path component without following symlinks."""
+    expanded = path.expanduser()
+    if not expanded.is_absolute():
+        expanded = Path.cwd() / expanded
+    if not expanded.name:
+        return expanded
+    return expanded.parent.resolve() / expanded.name
+
+
 def _resolve_sync_dest(
     adapter: str, dest: Path | None, target_root: Path | None
 ) -> tuple[Path, str]:
     if adapter not in PSTACK_SYNC_ADAPTERS:
         raise ValueError(
-            f"unsupported adapter {adapter!r}; choose from {', '.join(sorted(PSTACK_SYNC_ADAPTERS))}"
+            f"unsupported adapter {adapter!r}; choose from auto, {', '.join(sorted(PSTACK_SYNC_ADAPTERS))}"
         )
     default_raw, layout = PSTACK_SYNC_ADAPTERS[adapter]
     if dest is not None:
-        return dest.expanduser().resolve(), layout
-    base_raw = Path(default_raw).expanduser()
-    if base_raw.is_absolute():
-        return base_raw.resolve(), layout
-    anchor = (target_root or Path.cwd()).resolve()
-    return (anchor / base_raw).resolve(), layout
+        raw_dest = dest.expanduser()
+        if not raw_dest.is_absolute():
+            anchor = (target_root or Path.cwd()).resolve()
+            raw_dest = anchor / raw_dest
+        final_dest = _normalize_without_following_final_symlink(raw_dest)
+    else:
+        base_raw = Path(default_raw).expanduser()
+        if base_raw.is_absolute():
+            final_dest = _normalize_without_following_final_symlink(base_raw)
+        else:
+            anchor = (target_root or Path.cwd()).resolve()
+            final_dest = _normalize_without_following_final_symlink(anchor / base_raw)
+
+    if final_dest.is_symlink():
+        raise ValueError(
+            f"refusing to sync pstack into symlink destination: {final_dest}"
+        )
+    return final_dest, layout
 
 
 def _discover_skill_dirs(pstack_src: Path) -> dict[str, Path]:
@@ -112,20 +141,249 @@ def _discover_skill_dirs(pstack_src: Path) -> dict[str, Path]:
     return found
 
 
+def _load_target_definition_for_sync(
+    target_root: Path, approval_branch: str | None
+) -> GardenDefinition | None:
+    try:
+        root = repo_root(target_root)
+    except GitError:
+        root = target_root.resolve()
+
+    if approval_branch:
+        try:
+            ref_name, commit_sha = resolve_branch_commit(root, approval_branch)
+        except GitError as exc:
+            raise ValueError(str(exc)) from exc
+        raw = read_file_at(root, commit_sha, GARDEN_DEF_REL_PATH)
+        if raw is not None:
+            return load_definition_bytes(raw, f"{ref_name}:{GARDEN_DEF_REL_PATH}")
+        raise ValueError(
+            f"could not read approved {GARDEN_DEF_REL_PATH} from branch '{approval_branch}'"
+        )
+
+    def_path = root / GARDEN_DEF_REL_PATH
+    if def_path.is_file():
+        return load_definition(def_path)
+    return None
+
+
+def _resolve_auto_adapters(
+    definition: GardenDefinition | None,
+) -> tuple[str, ...]:
+    if definition is None:
+        return ("codex",)
+    real_adapters = definition_real_adapters(definition)
+    if not real_adapters:
+        return ("codex",)
+    unsupported = [a for a in real_adapters if a not in PSTACK_SYNC_ADAPTERS]
+    if unsupported:
+        raise ValueError(
+            f"automatic pstack sync does not support adapter(s): {', '.join(unsupported)}; pass --adapter and --dest explicitly"
+        )
+    return real_adapters
+
+
+def _fetch_verified_pstack_subpath(
+    clone_dir: Path,
+    fetch_source: str,
+    pinned_ref: str,
+    subpath: Path,
+    core_skills: list[str],
+) -> tuple[Path, dict[str, Path]]:
+    clone_dir.mkdir(parents=True, exist_ok=True)
+    init_proc = _run_git(clone_dir, "init", "-q")
+    if init_proc.returncode != 0:
+        raise RuntimeError(f"git init failed: {init_proc.stderr.strip()}")
+
+    fetch_proc = _run_git(clone_dir, "fetch", "--depth", "1", fetch_source, pinned_ref)
+    if fetch_proc.returncode != 0:
+        fallback = _run_git(clone_dir, "fetch", fetch_source)
+        if fallback.returncode != 0:
+            raise RuntimeError(
+                f"git fetch failed for {fetch_source}@{pinned_ref}: "
+                f"{fallback.stderr.strip() or fetch_proc.stderr.strip()}"
+            )
+        co_proc = _run_git(clone_dir, "checkout", "--detach", pinned_ref)
+    else:
+        co_proc = _run_git(clone_dir, "checkout", "--detach", "FETCH_HEAD")
+
+    if co_proc.returncode != 0:
+        raise RuntimeError(
+            f"git checkout {pinned_ref} failed: {co_proc.stderr.strip()}"
+        )
+
+    rev_proc = _run_git(clone_dir, "rev-parse", "HEAD")
+    actual_sha = rev_proc.stdout.strip()
+    if rev_proc.returncode != 0 or actual_sha != pinned_ref:
+        raise RuntimeError(
+            f"checked out commit {actual_sha!r} does not match pinned_ref {pinned_ref!r}"
+        )
+
+    src_root = (clone_dir / subpath).resolve()
+    if not src_root.is_dir() or (
+        clone_dir.resolve() not in src_root.parents
+        and src_root != clone_dir.resolve()
+    ):
+        raise RuntimeError(
+            f"subpath {subpath.as_posix()!r} not found in {fetch_source}@{pinned_ref}"
+        )
+
+    skill_dirs = _discover_skill_dirs(src_root)
+    missing_core = [s for s in core_skills if s not in skill_dirs]
+    if missing_core:
+        raise RuntimeError(
+            f"fetched pstack@{pinned_ref[:12]} is missing core skill(s): {', '.join(missing_core)}"
+        )
+    return src_root, skill_dirs
+
+
+def _install_plugin_layout(
+    src_root: Path,
+    skill_dirs: dict[str, Path],
+    dest_path: Path,
+    pinned_ref: str,
+) -> list[str]:
+    if dest_path.is_symlink():
+        raise ValueError(
+            f"refusing to sync pstack into symlink destination: {dest_path}"
+        )
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=".pstack-sync-", dir=str(dest_path.parent))
+    )
+    backup: Path | None = None
+    preserved_custom: list[str] = []
+    try:
+        shutil.copytree(src_root, staging, dirs_exist_ok=True)
+        # Preserve non-conflicting custom skills already in the existing plugin dir
+        if dest_path.is_dir():
+            existing_skills = _discover_skill_dirs(dest_path)
+            target_skills_parent = (
+                (staging / "skills") if (staging / "skills").is_dir() else staging
+            )
+            for name, existing_dir in sorted(existing_skills.items()):
+                if name in skill_dirs:
+                    continue
+                shutil.copytree(existing_dir, target_skills_parent / name)
+                preserved_custom.append(name)
+
+        (staging / MANAGED_MARKER_FILENAME).write_text(
+            pinned_ref + "\n", encoding="utf-8"
+        )
+        if dest_path.exists():
+            backup = dest_path.parent / f".pstack-backup-{staging.name}"
+            dest_path.replace(backup)
+        staging.replace(dest_path)
+    except Exception:
+        if backup is not None and backup.exists() and not dest_path.exists():
+            backup.replace(dest_path)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+    finally:
+        if backup is not None and backup.exists():
+            if backup.is_file():
+                backup.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(backup, ignore_errors=True)
+    return sorted(set(skill_dirs.keys()) | set(preserved_custom))
+
+
+def _install_skills_dir_layout(
+    skill_dirs: dict[str, Path],
+    dest_path: Path,
+    pinned_ref: str,
+    core_skills: list[str],
+    *,
+    force: bool = False,
+) -> list[str]:
+    if dest_path.is_symlink():
+        raise ValueError(
+            f"refusing to sync pstack into symlink destination: {dest_path}"
+        )
+    dest_path.mkdir(parents=True, exist_ok=True)
+
+    # Pre-flight safety checks before writing anything
+    unmanaged_conflicts: list[str] = []
+    for name in sorted(skill_dirs.keys()):
+        existing = dest_path / name
+        if existing.is_symlink():
+            raise ValueError(
+                f"refusing to overwrite symlink skill directory: {existing}"
+            )
+        if existing.exists():
+            marker = existing / MANAGED_MARKER_FILENAME
+            if not marker.is_file() and not force:
+                unmanaged_conflicts.append(name)
+    if unmanaged_conflicts:
+        raise ValueError(
+            f"refusing to overwrite unmanaged existing skill(s) in {dest_path}: "
+            f"{', '.join(unmanaged_conflicts)} (pass --force to replace)"
+        )
+
+    staging = Path(tempfile.mkdtemp(prefix=".pstack-stage-", dir=str(dest_path)))
+    backup = Path(tempfile.mkdtemp(prefix=".pstack-backup-", dir=str(dest_path)))
+    moved_to_backup: list[str] = []
+    installed_names: list[str] = []
+    try:
+        # Stage and verify ALL skills before mutating dest_path
+        for name, sdir in sorted(skill_dirs.items()):
+            staged_dir = staging / name
+            shutil.copytree(sdir, staged_dir)
+            (staged_dir / MANAGED_MARKER_FILENAME).write_text(
+                pinned_ref + "\n", encoding="utf-8"
+            )
+        for core in core_skills:
+            if not (staging / core / "SKILL.md").is_file():
+                raise RuntimeError(f"staged core skill missing SKILL.md: {core}")
+
+        # Move existing target dirs to backup first
+        for name in sorted(skill_dirs.keys()):
+            existing = dest_path / name
+            if existing.exists():
+                existing.replace(backup / name)
+                moved_to_backup.append(name)
+
+        # Atomically move all staged skills into place
+        for name in sorted(skill_dirs.keys()):
+            (staging / name).replace(dest_path / name)
+            installed_names.append(name)
+    except Exception:
+        # Roll back: remove partially installed skills and restore every backup
+        for name in installed_names:
+            partial = dest_path / name
+            if partial.exists():
+                shutil.rmtree(partial, ignore_errors=True)
+        for name in moved_to_backup:
+            backed = backup / name
+            if backed.exists() and not (dest_path / name).exists():
+                backed.replace(dest_path / name)
+        raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
+    return installed_names
+
+
 def sync_pstack(
     *,
     adapter: str = "antigravity",
     dest: Path | None = None,
     target_root: Path | None = None,
+    approval_branch: str | None = None,
     source: str | None = None,
     apply: bool = False,
+    force: bool = False,
     nursery_root: Path | None = None,
 ) -> dict[str, Any]:
     """Plan or execute pinned pstack synchronization from harnesses/pstack.toml.
 
     Dry-run by default (`apply=False`). When `apply=True`, fetches the exact
     `pinned_ref` commit SHA, verifies `git rev-parse HEAD == pinned_ref` and
-    that all `[skills].core` definitions exist, then installs into `dest`.
+    that all `[skills].core` definitions exist, then installs atomically into `dest`.
     """
     n_root = nursery_root or resolve_nursery_root()
     manifest = load_pstack_manifest(n_root)
@@ -152,16 +410,42 @@ def sync_pstack(
     if not core_skills:
         raise ValueError("harnesses/pstack.toml defines empty [skills].core")
 
+    target_def: GardenDefinition | None = None
+    if target_root is not None and (approval_branch is not None or adapter == "auto"):
+        target_def = _load_target_definition_for_sync(target_root, approval_branch)
+    if target_def is not None and target_def.common_harness.ref != pinned_ref:
+        raise ValueError(
+            f"target approved [common_harness].ref ({target_def.common_harness.ref[:12]}) "
+            f"does not match nursery pinned_ref ({pinned_ref[:12]})"
+        )
+
+    if adapter == "auto":
+        if dest is not None:
+            raise ValueError("--dest cannot be combined with --adapter auto")
+        adapters_to_sync = _resolve_auto_adapters(target_def)
+    else:
+        adapters_to_sync = (adapter,)
+
+    resolved_targets: list[tuple[str, Path, str]] = []
+    for ad in adapters_to_sync:
+        dpath, layout = _resolve_sync_dest(ad, dest, target_root)
+        resolved_targets.append((ad, dpath, layout))
+
     fetch_source = source or upstream
-    dest_path, layout = _resolve_sync_dest(adapter, dest, target_root)
+    primary_adapter, primary_dest, primary_layout = resolved_targets[0]
 
     plan: dict[str, Any] = {
         "adapter": adapter,
-        "layout": layout,
+        "resolved_adapters": [ad for ad, _, _ in resolved_targets],
+        "layout": primary_layout,
         "source": fetch_source,
         "subpath": subpath.as_posix(),
         "pinned_ref": pinned_ref,
-        "dest": str(dest_path),
+        "dest": str(primary_dest),
+        "destinations": [
+            {"adapter": ad, "dest": str(dp), "layout": ly}
+            for ad, dp, ly in resolved_targets
+        ],
         "core_skills": core_skills,
         "applied": False,
     }
@@ -169,90 +453,34 @@ def sync_pstack(
         return plan
 
     with tempfile.TemporaryDirectory() as tmp:
-        clone_dir = Path(tmp) / "pstack-src"
-        clone_dir.mkdir(parents=True, exist_ok=True)
-        init_proc = _run_git(clone_dir, "init", "-q")
-        if init_proc.returncode != 0:
-            raise RuntimeError(f"git init failed: {init_proc.stderr.strip()}")
-
-        fetch_proc = _run_git(clone_dir, "fetch", "--depth", "1", fetch_source, pinned_ref)
-        if fetch_proc.returncode != 0:
-            # Fallback when remote does not advertise arbitrary commit fetch
-            fallback = _run_git(clone_dir, "fetch", fetch_source)
-            if fallback.returncode != 0:
-                raise RuntimeError(
-                    f"git fetch failed for {fetch_source}@{pinned_ref}: "
-                    f"{fallback.stderr.strip() or fetch_proc.stderr.strip()}"
+        src_root, skill_dirs = _fetch_verified_pstack_subpath(
+            Path(tmp) / "pstack-src",
+            fetch_source,
+            pinned_ref,
+            subpath,
+            core_skills,
+        )
+        all_installed: list[str] = []
+        for _, dest_path, layout in resolved_targets:
+            if layout == "plugin":
+                installed = _install_plugin_layout(
+                    src_root, skill_dirs, dest_path, pinned_ref
                 )
-            co_proc = _run_git(clone_dir, "checkout", "--detach", pinned_ref)
-        else:
-            co_proc = _run_git(clone_dir, "checkout", "--detach", "FETCH_HEAD")
-
-        if co_proc.returncode != 0:
-            raise RuntimeError(
-                f"git checkout {pinned_ref} failed: {co_proc.stderr.strip()}"
-            )
-
-        rev_proc = _run_git(clone_dir, "rev-parse", "HEAD")
-        actual_sha = rev_proc.stdout.strip()
-        if rev_proc.returncode != 0 or actual_sha != pinned_ref:
-            raise RuntimeError(
-                f"checked out commit {actual_sha!r} does not match pinned_ref {pinned_ref!r}"
-            )
-
-        src_root = (clone_dir / subpath).resolve()
-        if not src_root.is_dir() or (
-            clone_dir.resolve() not in src_root.parents
-            and src_root != clone_dir.resolve()
-        ):
-            raise RuntimeError(f"subpath {subpath_raw!r} not found in {fetch_source}@{pinned_ref}")
-
-        skill_dirs = _discover_skill_dirs(src_root)
-        missing_core = [s for s in core_skills if s not in skill_dirs]
-        if missing_core:
-            raise RuntimeError(
-                f"fetched pstack@{pinned_ref[:12]} is missing core skill(s): {', '.join(missing_core)}"
-            )
-
-        installed_skills: list[str] = []
-        if layout == "plugin":
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            staging = Path(tempfile.mkdtemp(prefix=".pstack-sync-", dir=str(dest_path.parent)))
-            backup: Path | None = None
-            try:
-                shutil.copytree(src_root, staging, dirs_exist_ok=True)
-                (staging / ".garden-pstack-ref").write_text(pinned_ref + "\n", encoding="utf-8")
-                if dest_path.is_symlink() or dest_path.exists():
-                    backup = dest_path.parent / f".pstack-backup-{staging.name}"
-                    dest_path.replace(backup)
-                staging.replace(dest_path)
-            except Exception:
-                if backup is not None and (backup.is_symlink() or backup.exists()) and not dest_path.exists():
-                    backup.replace(dest_path)
-                if staging.exists():
-                    shutil.rmtree(staging, ignore_errors=True)
-                raise
-            finally:
-                if backup is not None and (backup.is_symlink() or backup.exists()):
-                    if backup.is_symlink() or backup.is_file():
-                        backup.unlink(missing_ok=True)
-                    else:
-                        shutil.rmtree(backup, ignore_errors=True)
-            installed_skills = sorted(skill_dirs.keys())
-        else:
-            dest_path.mkdir(parents=True, exist_ok=True)
-            for name, sdir in sorted(skill_dirs.items()):
-                target_skill_dir = dest_path / name
-                if target_skill_dir.is_symlink() or target_skill_dir.is_file():
-                    target_skill_dir.unlink()
-                elif target_skill_dir.exists():
-                    shutil.rmtree(target_skill_dir)
-                shutil.copytree(sdir, target_skill_dir)
-                installed_skills.append(name)
+            else:
+                installed = _install_skills_dir_layout(
+                    skill_dirs,
+                    dest_path,
+                    pinned_ref,
+                    core_skills,
+                    force=force,
+                )
+            for s in installed:
+                if s not in all_installed:
+                    all_installed.append(s)
 
     return plan | {
         "applied": True,
-        "installed_skills": installed_skills,
+        "installed_skills": sorted(all_installed),
         "verified_core_skills": core_skills,
     }
 
@@ -275,6 +503,7 @@ def build_harness_guide(
     nursery_root: Path | None = None,
     strict_harness: bool = False,
     probe_mcp: bool = False,
+    trust_project_mcp: bool = False,
 ) -> dict[str, Any]:
     """Inspect a target repository and produce concrete setup guidance per environment."""
     if adapter != "all" and adapter not in GUIDE_ADAPTERS:
@@ -301,6 +530,7 @@ def build_harness_guide(
         include_advisory_core=True,
         adapters=eval_adapters,
         probe_mcp=probe_mcp,
+        trust_project_mcp=trust_project_mcp,
     )
 
     std_harness = _load_template_standard_harness(
@@ -346,7 +576,9 @@ def build_harness_guide(
         if mcp_for_snippets:
             if env_name == "codex":
                 env_entry["mcp_snippet_format"] = "toml"
-                env_entry["mcp_snippet"] = _render_codex_toml_mcp_snippet(mcp_for_snippets)
+                env_entry["mcp_snippet"] = _render_codex_toml_mcp_snippet(
+                    mcp_for_snippets
+                )
             else:
                 env_entry["mcp_snippet_format"] = "json"
                 env_entry["mcp_snippet"] = _render_json_mcp_snippet(mcp_for_snippets)
@@ -395,7 +627,7 @@ def build_harness_guide(
             ],
         },
         "environments": environments,
-        "ci_hint": "Pass `sync_pstack: true` to garden-reusable.yml when running real-agent flows in GitHub Actions.",
+        "ci_hint": "Pass `sync_pstack: true` to garden-reusable.yml (using a nursery_ref that includes sync_pstack) when running real-agent flows in GitHub Actions.",
     }
 
 
@@ -450,7 +682,9 @@ def format_harness_guide_markdown(guide: dict[str, Any]) -> str:
     lines.extend(["", "## Environment Setup"])
     for env_name, env_cfg in guide["environments"].items():
         lines.append(f"### {env_name}")
-        lines.append(f"- Sync pstack (`{env_cfg['pstack_dest']}`): `{env_cfg['pstack_sync_command']}`")
+        lines.append(
+            f"- Sync pstack (`{env_cfg['pstack_dest']}`): `{env_cfg['pstack_sync_command']}`"
+        )
         lines.append(f"- MCP config location(s): {env_cfg['mcp_config_targets']}")
         if "mcp_snippet" in env_cfg:
             fmt = env_cfg.get("mcp_snippet_format", "json")

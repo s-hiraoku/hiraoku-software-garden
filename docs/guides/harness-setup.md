@@ -11,17 +11,20 @@
 対象リポジトリのルートで次を実行します。
 
 ```sh
-# 構成と必須スキル・必須 MCP の設定を診断する
+# 構成と必須スキル・必須 MCP の設定を診断する（--skip-network は GitHub ブランチ保護 API の確認のみ省略）
 garden doctor --target . --skip-network
 
 # observe_only でも pstack コアスキルを必須として診断し、MCP の実接続（initialize）まで検証する
-garden doctor --target . --strict-harness --probe-mcp --skip-network
+garden doctor --target . --strict-harness --probe-mcp
+
+# プロジェクト内設定（.mcp.json / .codex/config.toml 等）の stdio MCP コマンドを内容確認のうえ起動許可する場合
+garden doctor --target . --strict-harness --probe-mcp --trust-project-mcp
 
 # 不足しているスキル・MCP とテンプレート推奨パターン、環境別の設定スニペットを表示する
 garden harness guide --target . --adapter all
 ```
 
-特定のアダプターだけを確認したいときは `--adapter antigravity|cursor|claude|codex` を指定します。
+`--skip-network` は GitHub のブランチ保護 API 確認だけを省略するオプションであり、`--probe-mcp` の HTTP/SSE 疎通確認は無効化しません。また、プロジェクト内設定ファイル由来の stdio MCP コマンドはセキュリティのため既定では起動せず、内容確認後に `--trust-project-mcp` を明示したときだけ実行します。特定のアダプターだけを確認したいときは `--adapter antigravity|cursor|claude|codex` を指定します。
 
 ---
 
@@ -41,7 +44,7 @@ garden harness sync-pstack --adapter claude --apply        # ~/.claude/skills（
 garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/skills（対象リポジトリ同梱）
 ```
 
-`sync-pstack --apply` は取得したコミットが `pinned_ref` と完全一致すること、および `[skills].core` の全スキルに `SKILL.md` があることを確認してから配置先を更新します。
+`sync-pstack --apply` は取得したコミットが `pinned_ref` と完全一致すること、および `[skills].core` の全スキルに `SKILL.md` があることを確認してから配置先を更新します。配置先や対象スキルがシンボリックリンクの場合は参照先を破壊しないよう拒否し、共有スキルディレクトリ（`codex` / `claude` / `repo`）では全スキルをステージ検証してから置換します（管理外の既存同名スキルは `--force` なしでは上書きしません）。`--approval-branch main` を付けると、対象リポジトリの承認済み `[common_harness].ref` と `pinned_ref` の一致も事前に照合します。
 
 ---
 
@@ -59,7 +62,7 @@ garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/s
 - サーバー設定はオブジェクトであり、空でない文字列の `command`・`url`・`serverUrl` のいずれかが必要です（`null` や空オブジェクトは未設定扱い）。
 - 上位設定に `disabled = true` / `enabled = false` / `disabledMcpjsonServers` があるサーバーは無効化済み（不足）として扱われます。
 - 実エージェントを使うフローでは、そのフローで選択したアダプター（例: `codex`）に適用される MCP 設定だけを参照します。
-- `garden doctor --probe-mcp` を指定すると、stdio サーバーには MCP `initialize`（JSON-RPC 2.0）を送信し、HTTP/SSE サーバーには `initialize` POST（405 時は GET）で実接続と応答を検証します。
+- `garden doctor --probe-mcp` を指定すると、stdio サーバーには MCP `initialize`（JSON-RPC 2.0）を送信し、HTTP/SSE サーバーには `initialize` POST（405 時は旧 HTTP+SSE の `endpoint` イベント経由で `initialize`）を送信して実接続と応答を検証します。Codex の `bearer_token_env_var` / `http_headers` / `env_http_headers` も反映し、別オリジンや HTTP ダウングレードへのリダイレクト時は認証ヘッダーを転送しません。
 
 ---
 
@@ -80,19 +83,19 @@ garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/s
 
 ## 5. GitHub Actions CI での再現
 
-実エージェントまたは pstack 必須スキルを含むワークフローを GitHub Actions 上で動かすときは、再利用ワークフロー [garden-reusable.yml](../../.github/workflows/garden-reusable.yml) に `sync_pstack: true` を渡します。
+実エージェントまたは pstack 必須スキルを含むワークフローを GitHub Actions 上で動かすときは、`sync_pstack` を含むナーサリー版（`main`、または `sync_pstack` 導入後に発行したタグ）を `uses` と `nursery_ref` の両方に指定して [garden-reusable.yml](../../.github/workflows/garden-reusable.yml) を呼び出します。
 
 ```yaml
 jobs:
   garden:
-    uses: s-hiraoku/hiraoku-software-garden/.github/workflows/garden-reusable.yml@v0.1.1
+    uses: s-hiraoku/hiraoku-software-garden/.github/workflows/garden-reusable.yml@main
     with:
       flow: auto
-      nursery_ref: v0.1.1
+      nursery_ref: main
       sync_pstack: true
 ```
 
-`sync_pstack: true` を有効にすると、`garden run` の実行前に `garden harness sync-pstack --adapter codex --apply` が走り、`harnesses/pstack.toml` の固定コミット SHA がランナーの `~/.agents/skills` へ配置されます。
+`sync_pstack: true` を有効にすると、`garden run` の実行前に `garden harness sync-pstack --adapter auto --target . --approval-branch <承認ブランチ> --apply` が走り、承認済み `[common_harness].ref` と `pinned_ref` の一致を確認したうえで、フローの使用アダプターに応じたスキル配置先（Codex は `~/.agents/skills`、Claude は `~/.claude/skills` 等）へ固定版 pstack を配置します。
 
 ---
 

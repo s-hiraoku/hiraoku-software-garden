@@ -97,6 +97,7 @@ def run_doctor(
     approval_branch: str = "main",
     strict_harness: bool = False,
     probe_mcp: bool = False,
+    trust_project_mcp: bool = False,
 ) -> tuple[int, list[DiagnosticItem]]:
     """Run all diagnostic checks. Returns (exit_code, items)."""
     items: list[DiagnosticItem] = []
@@ -256,6 +257,7 @@ def run_doctor(
         include_advisory_core=True,
         adapters=real_adapters,
         probe_mcp=probe_mcp,
+        trust_project_mcp=trust_project_mcp,
     )
     hint_suffix = (
         f" ({'; '.join(harness_eval.remedy_hints)})"
