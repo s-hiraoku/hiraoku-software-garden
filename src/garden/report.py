@@ -19,6 +19,7 @@ KIND_TO_LABEL = {
 MANAGED_LABELS = ("garden:running", "garden:needs-human", "garden:harvest-ready")
 MANAGED_LABEL_SPECS: dict[str, tuple[str, str]] = {
     "garden:harvest-ready": ("0e8a16", "Software Garden verified all approved criteria"),
+    "garden:pr-ready": ("0e8a16", "Software Garden PR is green and ready for human merge"),
     "garden:needs-human": ("d93f0b", "Software Garden requires human review or decision"),
     "garden:running": ("1d76db", "Software Garden verification is in progress"),
 }

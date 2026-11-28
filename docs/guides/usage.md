@@ -90,7 +90,7 @@ garden report path/to/your-repo/.garden/runs/<run_id>
 - 実行記録は `.garden/runs/<run_id>/` に残り、`garden report` で人が読める要約（Markdown または `--format json`）にできます。
 - 同じコミット、同じ承認済み仕様、同じ定義ですでに `SATISFIED` になっている場合は再実行を省きます（CI では `--check-github-markers` により Issue / PR の HTML マーカーも照合します）。やり直すときは `--force` を付けます。
 - `fix_and_retry` や実装ステップを含むフローでは `[agents.<名前>]` に `codex` / `claude` / `gemini` / `antigravity` / `custom` / `mock` の各アダプターを指定でき、エージェントの応答を `response.json` へ正規化したうえで事後ガードで変更範囲を検証します。
-- Issue 起票からマージ可能 PR までを 1 コマンドで実行する場合は `garden work --target path/to/your-repo --issue <番号>` を使います（実装・検証・PR 作成後に `garden pr-watch` で CI 失敗・コンフリクト・レビュー指摘を上限回数内で自動修正し、マージ可能になったら `garden:harvest-ready` を付けて停止します。最終マージは人が行います）。既存 PR の監視・自動修正だけを行う場合は `garden pr-watch <PR番号> --target path/to/your-repo` を使います。
+- Issue 起票からマージ可能 PR までを 1 コマンドで実行する場合は `garden work --target path/to/your-repo --issue <番号>` を使います（実装・検証・PR 作成後に `garden pr-watch` で CI 失敗・コンフリクト・レビュー指摘を上限回数内で自動修正し、マージ可能になったら `garden:pr-ready` を付けて停止します。`auto_merge` 設定があっても `work` からは `propose_pr` を上限とし、最終マージは人が行います）。既存 PR の監視・自動修正だけを行う場合は `garden pr-watch <PR番号> --target path/to/your-repo` を使います（PR 側コードの実行は環境変数を浄化したうえで OS サンドボックスまたは `--sandbox-cmd` で隔離し、隔離手段のない環境では `--trust-pr-code` なしでは安全側停止します）。
 
 | 判定 | 終了コード | 意味 |
 | --- | --- | --- |

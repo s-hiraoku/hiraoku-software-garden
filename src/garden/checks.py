@@ -74,6 +74,8 @@ def run_check(
     run_id: str,
     step_id: str,
     step_dir: Path,
+    env_override: dict[str, str] | None = None,
+    command_prefix: tuple[str, ...] = (),
 ) -> CheckExecutionResult:
     step_dir.mkdir(parents=True, exist_ok=True)
     evidence_dir = step_dir / "evidence"
@@ -81,7 +83,7 @@ def run_check(
     stdout_file = step_dir / "stdout.log"
     stderr_file = step_dir / "stderr.log"
 
-    env = os.environ.copy()
+    env = dict(env_override) if env_override is not None else os.environ.copy()
     env["GARDEN_RUN_ID"] = run_id
     env["GARDEN_STEP_ID"] = step_id
     env["GARDEN_EVIDENCE_DIR"] = str(evidence_dir.resolve())
@@ -94,7 +96,7 @@ def run_check(
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            list(check.command),
+            [*command_prefix, *check.command],
             cwd=worktree,
             env=env,
             capture_output=True,

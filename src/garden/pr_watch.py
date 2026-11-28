@@ -1,19 +1,25 @@
 """PR watch and guarded auto-fix loop (`garden pr-watch`) — Phase 2.
 
-Monitors an open GitHub PR for CI failures, merge conflicts, and unresolved
-actionable review comments (trusted humans + CodeRabbit/Codex bots). Fixes are
-always executed inside an isolated git worktree, bounded by the approved Trust
-Anchor delegation policy (`guard.py`) and local check re-verification before
-pushing. `garden pr-watch` NEVER merges a PR; it marks a mergeable PR with
-`garden:harvest-ready` for human final merge.
+Monitors an open GitHub PR for CI failures, merge conflicts, behind-base status,
+and unresolved actionable review comments (repo write-permission humans +
+explicitly trusted reviewers + CodeRabbit/Codex bots). Fixes execute inside an
+isolated git worktree with scrubbed environment + OS/custom sandboxing, bounded
+by the freshly fetched remote Trust Anchor (`guard.py`). The candidate commit is
+frozen BEFORE running local checks on an immutable snapshot of that exact SHA,
+and only that verified SHA is pushed non-force. `garden pr-watch` NEVER merges a
+PR and marks merge-ready PRs with `garden:pr-ready` (distinct from Garden's
+spec-verified `garden:harvest-ready` label).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -27,12 +33,12 @@ from garden.adapters import (
     run_command_adapter,
     run_mock_adapter,
 )
+from garden.adapters.providers import select_pr_fix_findings
 from garden.checks import run_check
 from garden.definition import (
     AgentConfig,
     CheckConfig,
     DelegationConfig,
-    DefinitionError,
     FlowConfig,
     GardenDefinition,
 )
@@ -41,14 +47,12 @@ from garden.engine import (
     _apply_effective_delegation,
     _referenced_active_checks,
 )
-from garden.git_utils import GitError, git_run, head_commit, list_remotes, repo_root
+from garden.git_utils import git_run, head_commit, list_remotes, repo_root
 from garden.guard import snapshot_untracked_files, verify_post_agent_guard
-from garden.harness import evaluate_harness_requirements, flow_real_adapters
-from garden.issues import TRUSTED_AUTHOR_ASSOCIATIONS, _is_bot_author, parse_repo_identity
+from garden.harness import evaluate_harness_requirements
+from garden.issues import _is_bot_author, parse_repo_identity
 from garden.report import (
     MANAGED_LABEL_SPECS,
-    _ensure_managed_label,
-    _fetch_attached_labels,
     parse_garden_markers,
 )
 from garden.spec import verify_trust_anchor
@@ -64,6 +68,15 @@ DEFAULT_TRUSTED_REVIEW_BOTS: frozenset[str] = frozenset(
         "copilot-pull-request-reviewer[bot]",
     }
 )
+PR_WATCH_MANAGED_LABELS: tuple[str, ...] = (
+    "garden:running",
+    "garden:needs-human",
+    "garden:pr-ready",
+)
+_WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
+_CODEX_BOT_LOGINS = frozenset({"chatgpt-codex-connector", "chatgpt-codex-connector[bot]"})
+_CODERABBIT_BOT_LOGINS = frozenset({"coderabbitai", "coderabbitai[bot]"})
+_CODEX_STATE_RE = re.compile(r"<!--\s*codex-review-state:v1\s+(\{.*?\})\s*-->", re.DOTALL)
 
 _PENDING_CHECK_STATUSES = frozenset(
     {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}
@@ -79,10 +92,72 @@ _FAILED_CHECK_CONCLUSIONS = frozenset(
         "ERROR",
     }
 )
+_MERGE_READY_STATES = frozenset({"CLEAN", "HAS_HOOKS"})
 _PR_URL_NUM_RE = re.compile(r"/pull/(\d+)(?:[/?#].*)?$")
 _ACTIONS_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
+_CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}\s|={7}$|>{7}\s)", re.MULTILINE)
 _GH_TIMEOUT_SEC = 30
 _MAX_LOG_EXCERPT_CHARS = 3500
+_SENSITIVE_ENV_SUBSTRINGS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "APIKEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+    "AUTH",
+)
+_SENSITIVE_ENV_EXACT = frozenset(
+    {
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_PAT",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_API_TOKEN",
+        "TWINE_PASSWORD",
+    }
+)
+_SENSITIVE_ENV_PREFIXES = ("AWS_", "AZURE_", "DOCKER_", "GH_", "GITHUB_")
+_ADAPTER_ALLOWED_ENV_KEYS: dict[str, tuple[str, ...]] = {
+    "claude": ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"),
+    "gemini": (
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ),
+    "codex": ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+    "antigravity": (),
+    "custom": (),
+    "mock": (),
+}
+_ADAPTER_HOME_WRITE_SUBDIRS: dict[str, tuple[str, ...]] = {
+    "claude": (".claude", ".claude.json"),
+    "gemini": (".gemini",),
+    "codex": (".codex",),
+    "antigravity": (".gemini",),
+}
+_DENIED_HOME_SUBDIRS: tuple[str, ...] = (
+    ".ssh",
+    ".config/gh",
+    ".aws",
+    ".gnupg",
+    ".netrc",
+    ".kube",
+    ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    ".docker",
+)
 
 
 @dataclass(frozen=True)
@@ -114,9 +189,15 @@ class PrReviewFinding:
     created_at: str = ""
     source: str = "thread"  # thread | review
 
+    @property
+    def version_key(self) -> str:
+        digest = hashlib.sha256(self.body.encode("utf-8")).hexdigest()[:16]
+        return f"{self.finding_id}:{digest}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "finding_id": self.finding_id,
+            "version_key": self.version_key,
             "author": self.author,
             "author_association": self.author_association,
             "path": self.path,
@@ -141,7 +222,10 @@ class PrSnapshot:
     head_ref_oid: str
     checks: tuple[PrCheckItem, ...]
     findings: tuple[PrReviewFinding, ...]
+    review_decision: str = ""
     review_pending: bool = False
+    review_threads_complete: bool = True
+    review_threads_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -152,13 +236,30 @@ class PrSnapshot:
             "is_cross_repository": self.is_cross_repository,
             "mergeable": self.mergeable,
             "merge_state_status": self.merge_state_status,
+            "review_decision": self.review_decision,
             "head_ref_name": self.head_ref_name,
             "base_ref_name": self.base_ref_name,
             "head_ref_oid": self.head_ref_oid,
             "checks": [c.to_dict() for c in self.checks],
             "findings": [f.to_dict() for f in self.findings],
             "review_pending": self.review_pending,
+            "review_threads_complete": self.review_threads_complete,
+            "review_threads_error": self.review_threads_error,
         }
+
+
+def validate_watch_options(
+    *,
+    poll_interval_sec: int,
+    max_rounds: int,
+    max_wait_sec: int,
+) -> None:
+    if isinstance(poll_interval_sec, bool) or poll_interval_sec < 1:
+        raise ValueError("poll_interval_sec must be >= 1")
+    if isinstance(max_rounds, bool) or max_rounds < 0:
+        raise ValueError("max_rounds must be >= 0")
+    if isinstance(max_wait_sec, bool) or max_wait_sec < 1:
+        raise ValueError("max_wait_sec must be >= 1")
 
 
 def parse_pr_number_from_url(pr_url: str) -> int | None:
@@ -169,12 +270,39 @@ def parse_pr_number_from_url(pr_url: str) -> int | None:
     return num if num > 0 else None
 
 
-def _run_gh(args: list[str], *, cwd: Path, timeout: int = _GH_TIMEOUT_SEC) -> subprocess.CompletedProcess[str]:
+def _resolve_origin_repo(root: Path) -> tuple[str | None, str | None]:
+    """Return (repo_identity 'host/owner/repo', gh_repo_flag) for git remote 'origin'."""
+    try:
+        remotes = list_remotes(root)
+    except Exception:
+        return None, None
+    origin_url = remotes.get("origin")
+    repo_id = parse_repo_identity(origin_url)
+    if not repo_id:
+        return None, None
+    parts = repo_id.split("/")
+    if len(parts) != 3:
+        return None, None
+    host, owner, repo = parts
+    gh_arg = f"{owner}/{repo}" if host == "github.com" else f"{host}/{owner}/{repo}"
+    return repo_id, gh_arg
+
+
+def _run_gh(
+    args: list[str],
+    *,
+    cwd: Path,
+    gh_repo: str | None = None,
+    timeout: int = _GH_TIMEOUT_SEC,
+) -> subprocess.CompletedProcess[str]:
     if not shutil.which("gh"):
         raise RuntimeError("gh CLI is required for PR watch operations")
+    full_args = list(args)
+    if gh_repo and full_args and full_args[0] in ("pr", "issue", "label", "run"):
+        full_args.extend(["-R", gh_repo])
     try:
         return subprocess.run(
-            ["gh", *args],
+            ["gh", *full_args],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -187,39 +315,79 @@ def _run_gh(args: list[str], *, cwd: Path, timeout: int = _GH_TIMEOUT_SEC) -> su
         ) from error
 
 
-def _post_pr_comment(pr_number: int, body: str, *, cwd: Path) -> str | None:
+def _post_pr_comment(
+    pr_number: int, body: str, *, cwd: Path, gh_repo: str | None = None
+) -> str | None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         body_path = Path(tmp_dir) / "pr-comment.md"
         body_path.write_text(body, encoding="utf-8")
         proc = _run_gh(
             ["pr", "comment", str(pr_number), "--body-file", str(body_path)],
             cwd=cwd,
+            gh_repo=gh_repo,
         )
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
 
 
+def _ensure_pr_label(lbl: str, *, cwd: Path, gh_repo: str | None = None) -> None:
+    color, desc = MANAGED_LABEL_SPECS.get(lbl, ("ededed", "Managed by Software Garden"))
+    _run_gh(
+        ["label", "create", lbl, "--color", color, "--description", desc],
+        cwd=cwd,
+        gh_repo=gh_repo,
+    )
+
+
+def _fetch_pr_attached_labels(
+    pr_number: int, *, cwd: Path, gh_repo: str | None = None
+) -> set[str] | None:
+    proc = _run_gh(
+        ["issue", "view", str(pr_number), "--json", "labels"],
+        cwd=cwd,
+        gh_repo=gh_repo,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    return {
+        str(item.get("name"))
+        for item in (parsed.get("labels") or [])
+        if isinstance(item, dict) and item.get("name")
+    }
+
+
 def _set_pr_managed_label(
-    pr_number: int, target_label: str | None, *, cwd: Path
+    pr_number: int,
+    target_label: str | None,
+    *,
+    cwd: Path,
+    gh_repo: str | None = None,
 ) -> dict[str, Any]:
-    """Transition managed Garden labels on a PR (adding target_label, removing other managed labels)."""
-    managed = tuple(MANAGED_LABEL_SPECS.keys())
+    """Transition PR-watch labels (`garden:pr-ready`, `garden:needs-human`, `garden:running`).
+
+    Intentionally never adds or removes `garden:harvest-ready`, which is reserved
+    for Garden's spec-verified harvest reports.
+    """
     add = [target_label] if target_label else []
-    remove = [lbl for lbl in managed if lbl not in add]
+    remove = [lbl for lbl in PR_WATCH_MANAGED_LABELS if lbl not in add]
     warnings: list[str] = []
     added: list[str] = []
     removed: list[str] = []
 
     for lbl in add:
-        _ensure_managed_label(lbl, cwd=cwd)
+        _ensure_pr_label(lbl, cwd=cwd, gh_repo=gh_repo)
 
     add_failed = False
     if add:
         args = ["issue", "edit", str(pr_number)]
         for lbl in add:
             args.extend(["--add-label", lbl])
-        proc = _run_gh(args, cwd=cwd)
+        proc = _run_gh(args, cwd=cwd, gh_repo=gh_repo)
         if proc.returncode == 0:
             added = list(add)
         else:
@@ -227,7 +395,7 @@ def _set_pr_managed_label(
             warnings.append(proc.stderr.strip() or "add-label failed")
 
     if remove and not add_failed:
-        existing = _fetch_attached_labels(pr_number, cwd=cwd)
+        existing = _fetch_pr_attached_labels(pr_number, cwd=cwd, gh_repo=gh_repo)
         to_remove = (
             [lbl for lbl in remove if lbl in existing]
             if existing is not None
@@ -237,7 +405,7 @@ def _set_pr_managed_label(
             args = ["issue", "edit", str(pr_number)]
             for lbl in to_remove:
                 args.extend(["--remove-label", lbl])
-            proc = _run_gh(args, cwd=cwd)
+            proc = _run_gh(args, cwd=cwd, gh_repo=gh_repo)
             if proc.returncode == 0:
                 removed = to_remove
             else:
@@ -250,20 +418,55 @@ def _set_pr_managed_label(
     }
 
 
+def _fetch_user_repo_permission(
+    owner: str, repo: str, login: str, *, cwd: Path, cache: dict[str, str | None]
+) -> str | None:
+    key = login.strip().lower()
+    if key in cache:
+        return cache[key]
+    try:
+        proc = _run_gh(
+            [
+                "api",
+                f"repos/{owner}/{repo}/collaborators/{login}/permission",
+                "--jq",
+                ".permission",
+            ],
+            cwd=cwd,
+            timeout=15,
+        )
+    except RuntimeError:
+        cache[key] = None
+        return None
+    perm = proc.stdout.strip().lower() if proc.returncode == 0 else None
+    cache[key] = perm or None
+    return cache[key]
+
+
+def _author_login_lower(author_raw: Any) -> str:
+    if isinstance(author_raw, dict):
+        return str(author_raw.get("login") or "").strip().lower()
+    return str(author_raw or "").strip().lower()
+
+
 def _is_trusted_reviewer(
     author_raw: Any,
     author_association: str,
+    *,
     trusted_bots: frozenset[str],
+    trusted_humans: frozenset[str] | None = None,
 ) -> bool:
-    if isinstance(author_raw, dict):
-        login = str(author_raw.get("login") or "").strip().lower()
-    else:
-        login = str(author_raw or "").strip().lower()
+    """Allow only explicitly trusted review bots, repo OWNER, or verified write-access humans."""
+    login = _author_login_lower(author_raw)
+    if not login:
+        return False
     if login in trusted_bots or f"{login}[bot]" in trusted_bots:
         return True
     if _is_bot_author(author_raw):
         return False
-    return author_association.strip().upper() in TRUSTED_AUTHOR_ASSOCIATIONS
+    if trusted_humans is not None and login in trusted_humans:
+        return True
+    return author_association.strip().upper() == "OWNER"
 
 
 def _parse_status_rollup(raw_rollup: Any) -> list[PrCheckItem]:
@@ -310,13 +513,20 @@ def _parse_status_rollup(raw_rollup: Any) -> list[PrCheckItem]:
     return items
 
 
-def _fetch_failed_check_log(details_url: str, *, cwd: Path) -> str:
+def _fetch_failed_check_log(
+    details_url: str, *, cwd: Path, gh_repo: str | None = None
+) -> str:
     match = _ACTIONS_RUN_ID_RE.search(details_url or "")
     if not match:
         return ""
     run_id = match.group(1)
     try:
-        proc = _run_gh(["run", "view", run_id, "--log-failed"], cwd=cwd, timeout=20)
+        proc = _run_gh(
+            ["run", "view", run_id, "--log-failed"],
+            cwd=cwd,
+            gh_repo=gh_repo,
+            timeout=20,
+        )
     except RuntimeError:
         return ""
     if proc.returncode != 0 or not proc.stdout.strip():
@@ -327,21 +537,91 @@ def _fetch_failed_check_log(details_url: str, *, cwd: Path) -> str:
     return text
 
 
+def _fetch_more_thread_comments(
+    thread_id: str, start_cursor: str, *, cwd: Path
+) -> tuple[list[dict[str, Any]], bool]:
+    query = """
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          body
+          createdAt
+          authorAssociation
+          author {
+            login
+            __typename
+          }
+        }
+      }
+    }
+  }
+}
+"""
+    extra: list[dict[str, Any]] = []
+    cursor: str | None = start_cursor
+    for _ in range(20):
+        args = ["api", "graphql", "-f", f"query={query}", "-f", f"id={thread_id}"]
+        if cursor:
+            args.extend(["-f", f"after={cursor}"])
+        try:
+            proc = _run_gh(args, cwd=cwd)
+        except RuntimeError:
+            return extra, False
+        if proc.returncode != 0:
+            return extra, False
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return extra, False
+        if payload.get("errors"):
+            return extra, False
+        comments_conn = ((payload.get("data") or {}).get("node") or {}).get("comments") or {}
+        nodes = comments_conn.get("nodes") or []
+        extra.extend(n for n in nodes if isinstance(n, dict))
+        page_info = comments_conn.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return extra, True
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            return extra, False
+    return extra, False
+
+
 def _fetch_review_threads_graphql(
     owner: str, repo: str, pr_number: int, *, cwd: Path
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Fetch ALL review threads & replies with full cursor pagination.
+
+    Returns `(threads, complete, error_message)`. Never silently truncates or
+    masquerades GraphQL failures as zero unresolved threads.
+    """
     query = """
-query($owner: String!, $repo: String!, $number: Int!) {
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           id
           isResolved
           isOutdated
           path
           line
-          comments(first: 20) {
+          comments(first: 100) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             nodes {
               id
               body
@@ -359,8 +639,10 @@ query($owner: String!, $repo: String!, $number: Int!) {
   }
 }
 """
-    proc = _run_gh(
-        [
+    all_threads: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        args = [
             "api",
             "graphql",
             "-f",
@@ -371,27 +653,103 @@ query($owner: String!, $repo: String!, $number: Int!) {
             f"repo={repo}",
             "-F",
             f"number={pr_number}",
-        ],
-        cwd=cwd,
-    )
-    if proc.returncode != 0:
-        return []
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return []
-    pr_node = (
-        (payload.get("data") or {}).get("repository") or {}
-    ).get("pullRequest") or {}
-    nodes = (pr_node.get("reviewThreads") or {}).get("nodes") or []
-    return [n for n in nodes if isinstance(n, dict)]
+        ]
+        if cursor:
+            args.extend(["-f", f"after={cursor}"])
+        try:
+            proc = _run_gh(args, cwd=cwd)
+        except RuntimeError as error:
+            return all_threads, False, str(error)
+        if proc.returncode != 0:
+            return (
+                all_threads,
+                False,
+                proc.stderr.strip() or proc.stdout.strip() or "graphql reviewThreads failed",
+            )
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as error:
+            return all_threads, False, f"invalid graphql JSON: {error}"
+        if payload.get("errors"):
+            return all_threads, False, f"graphql errors: {payload['errors']}"
+
+        pr_node = (
+            (payload.get("data") or {}).get("repository") or {}
+        ).get("pullRequest")
+        if not isinstance(pr_node, dict):
+            return all_threads, False, "graphql response missing pullRequest node"
+        conn = pr_node.get("reviewThreads")
+        if not isinstance(conn, dict):
+            return all_threads, False, "graphql response missing reviewThreads connection"
+
+        nodes = conn.get("nodes") or []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            comments_conn = node.get("comments") or {}
+            c_page = comments_conn.get("pageInfo") or {}
+            if c_page.get("hasNextPage"):
+                tid = str(node.get("id") or "")
+                c_cursor = str(c_page.get("endCursor") or "")
+                if not tid or not c_cursor:
+                    return all_threads, False, f"incomplete comment pagination for thread {tid}"
+                extra_comments, c_ok = _fetch_more_thread_comments(tid, c_cursor, cwd=cwd)
+                if not c_ok:
+                    return all_threads, False, f"failed to paginate comments for thread {tid}"
+                merged_nodes = list(comments_conn.get("nodes") or []) + extra_comments
+                node = dict(node)
+                node["comments"] = {"nodes": merged_nodes}
+            all_threads.append(node)
+
+        page_info = conn.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return all_threads, True, None
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            return all_threads, False, "graphql reviewThreads hasNextPage without endCursor"
+
+    return all_threads, False, "reviewThreads pagination exceeded page limit"
+
+
+def _detect_review_bot_pending(raw_comments: Any, head_oid: str) -> bool:
+    """Detect active bot reviews strictly bound to verified bot authors and current HEAD."""
+    if not isinstance(raw_comments, list):
+        return False
+    for cmt in raw_comments:
+        if not isinstance(cmt, dict):
+            continue
+        login = _author_login_lower(cmt.get("author"))
+        body = str(cmt.get("body") or "")
+        if login in _CODERABBIT_BOT_LOGINS:
+            if "review in progress by coderabbit.ai" in body.lower():
+                return True
+        if login in _CODEX_BOT_LOGINS:
+            for match in _CODEX_STATE_RE.finditer(body):
+                try:
+                    state_obj = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(state_obj, dict):
+                    continue
+                for section in state_obj.values():
+                    if not isinstance(section, dict):
+                        continue
+                    status = str(section.get("status") or "").strip().lower()
+                    commit_sha = section.get("commit_sha")
+                    if status in ("running", "in_progress", "pending", "queued"):
+                        if not commit_sha or not head_oid or str(commit_sha) == head_oid:
+                            return True
+    return False
 
 
 def build_pr_snapshot(
     pr_view_data: dict[str, Any],
     *,
     review_threads: list[dict[str, Any]] | None = None,
+    review_threads_complete: bool = True,
+    review_threads_error: str | None = None,
     trusted_bots: frozenset[str] = DEFAULT_TRUSTED_REVIEW_BOTS,
+    trusted_humans: frozenset[str] | None = None,
     failed_logs_by_url: dict[str, str] | None = None,
 ) -> PrSnapshot:
     """Build a normalized PrSnapshot from raw GitHub PR JSON + GraphQL review threads."""
@@ -402,6 +760,7 @@ def build_pr_snapshot(
     is_cross_repo = bool(pr_view_data.get("isCrossRepository"))
     mergeable = str(pr_view_data.get("mergeable") or "UNKNOWN").strip().upper()
     merge_state = str(pr_view_data.get("mergeStateStatus") or "UNKNOWN").strip().upper()
+    review_decision = str(pr_view_data.get("reviewDecision") or "").strip().upper()
     head_ref = str(pr_view_data.get("headRefName") or "").strip()
     base_ref = str(pr_view_data.get("baseRefName") or "main").strip()
     head_oid = str(pr_view_data.get("headRefOid") or "").strip()
@@ -435,37 +794,35 @@ def build_pr_snapshot(
             continue
         author_raw = first_comment.get("author")
         assoc = str(first_comment.get("authorAssociation") or "").strip().upper()
-        if not _is_trusted_reviewer(author_raw, assoc, trusted_bots):
+        if not _is_trusted_reviewer(
+            author_raw, assoc, trusted_bots=trusted_bots, trusted_humans=trusted_humans
+        ):
             continue
         body = str(first_comment.get("body") or "").strip()
         if not body or parse_garden_markers(body):
             continue
-        # Combine follow-up replies from trusted reviewers in the same unresolved thread
         reply_texts: list[str] = [body]
         for reply in comments_nodes[1:]:
             if not isinstance(reply, dict):
                 continue
             r_assoc = str(reply.get("authorAssociation") or "").strip().upper()
-            if not _is_trusted_reviewer(reply.get("author"), r_assoc, trusted_bots):
+            if not _is_trusted_reviewer(
+                reply.get("author"),
+                r_assoc,
+                trusted_bots=trusted_bots,
+                trusted_humans=trusted_humans,
+            ):
                 continue
             r_body = str(reply.get("body") or "").strip()
             if r_body and not parse_garden_markers(r_body):
-                r_login = (
-                    str((reply.get("author") or {}).get("login") or "reviewer")
-                    if isinstance(reply.get("author"), dict)
-                    else str(reply.get("author") or "reviewer")
-                )
+                r_login = _author_login_lower(reply.get("author")) or "reviewer"
                 reply_texts.append(f"[Follow-up by {r_login}]: {r_body}")
 
         fid = str(thread.get("id") or first_comment.get("id") or f"thread-{len(findings)}")
         if fid in seen_ids:
             continue
         seen_ids.add(fid)
-        author_login = (
-            str(author_raw.get("login") or "reviewer")
-            if isinstance(author_raw, dict)
-            else str(author_raw or "reviewer")
-        )
+        author_login = _author_login_lower(author_raw) or "reviewer"
         raw_line = thread.get("line")
         line_num = (
             int(raw_line)
@@ -485,7 +842,6 @@ def build_pr_snapshot(
             )
         )
 
-    # Also capture CHANGES_REQUESTED top-level reviews on the current HEAD (or latest per reviewer)
     raw_reviews = pr_view_data.get("reviews") or []
     if isinstance(raw_reviews, list):
         latest_by_author: dict[str, dict[str, Any]] = {}
@@ -494,13 +850,11 @@ def build_pr_snapshot(
                 continue
             author_raw = rev.get("author")
             assoc = str(rev.get("authorAssociation") or "").strip().upper()
-            if not _is_trusted_reviewer(author_raw, assoc, trusted_bots):
+            if not _is_trusted_reviewer(
+                author_raw, assoc, trusted_bots=trusted_bots, trusted_humans=trusted_humans
+            ):
                 continue
-            login = (
-                str(author_raw.get("login") or "").strip().lower()
-                if isinstance(author_raw, dict)
-                else str(author_raw or "").strip().lower()
-            )
+            login = _author_login_lower(author_raw)
             if not login:
                 continue
             latest_by_author[login] = rev
@@ -526,18 +880,7 @@ def build_pr_snapshot(
                 )
             )
 
-    # Detect in-progress bot review comments (e.g. CodeRabbit / Codex review in progress)
-    review_pending = False
-    raw_comments = pr_view_data.get("comments") or []
-    if isinstance(raw_comments, list):
-        for cmt in raw_comments:
-            if not isinstance(cmt, dict):
-                continue
-            body = str(cmt.get("body") or "")
-            if "review in progress by coderabbit.ai" in body.lower():
-                review_pending = True
-            if "<!-- codex-review-state:v1" in body and '"status":"in_progress"' in body:
-                review_pending = True
+    review_pending = _detect_review_bot_pending(pr_view_data.get("comments"), head_oid)
 
     return PrSnapshot(
         number=number,
@@ -547,12 +890,15 @@ def build_pr_snapshot(
         is_cross_repository=is_cross_repo,
         mergeable=mergeable,
         merge_state_status=merge_state,
+        review_decision=review_decision,
         head_ref_name=head_ref,
         base_ref_name=base_ref,
         head_ref_oid=head_oid,
         checks=tuple(checks),
         findings=tuple(findings),
         review_pending=review_pending,
+        review_threads_complete=review_threads_complete,
+        review_threads_error=review_threads_error,
     )
 
 
@@ -560,10 +906,13 @@ def fetch_pr_snapshot(
     pr_number: int,
     *,
     cwd: Path,
+    gh_repo: str | None = None,
     trusted_bots: frozenset[str] = DEFAULT_TRUSTED_REVIEW_BOTS,
+    trusted_reviewers: frozenset[str] = frozenset(),
+    permission_cache: dict[str, str | None] | None = None,
     fetch_failed_logs: bool = True,
 ) -> PrSnapshot:
-    """Query GitHub for the current PR state, status checks, and unresolved review threads."""
+    """Query GitHub for the current PR state, status checks, and paginated review threads."""
     if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:
         raise ValueError(f"pr_number must be a positive integer, got {pr_number!r}")
 
@@ -574,9 +923,10 @@ def fetch_pr_snapshot(
             str(pr_number),
             "--json",
             "number,url,state,isDraft,isCrossRepository,mergeable,mergeStateStatus,"
-            "headRefName,baseRefName,headRefOid,statusCheckRollup,reviews,comments",
+            "reviewDecision,headRefName,baseRefName,headRefOid,statusCheckRollup,reviews,comments",
         ],
         cwd=cwd,
+        gh_repo=gh_repo,
     )
     if proc.returncode != 0:
         raise RuntimeError(
@@ -591,21 +941,80 @@ def fetch_pr_snapshot(
 
     repo_id = parse_repo_identity(pr_data.get("url"))
     threads: list[dict[str, Any]] = []
+    threads_complete = False
+    threads_error: str | None = None
+    owner_repo: tuple[str, str] | None = None
     if repo_id:
         parts = repo_id.split("/")
         if len(parts) == 3:
-            threads = _fetch_review_threads_graphql(parts[1], parts[2], pr_number, cwd=cwd)
+            owner_repo = (parts[1], parts[2])
+            threads, threads_complete, threads_error = _fetch_review_threads_graphql(
+                parts[1], parts[2], pr_number, cwd=cwd
+            )
+    else:
+        threads_error = "cannot determine repository owner/name from PR URL"
+
+    # Resolve effective write/maintain/admin permissions for candidate human reviewers
+    verified_humans: set[str] = set(trusted_reviewers)
+    perm_cache = permission_cache if permission_cache is not None else {}
+    if owner_repo is not None:
+        candidate_logins: set[str] = set()
+        for thread in threads:
+            if thread.get("isResolved") is True or thread.get("isOutdated") is True:
+                continue
+            for node in (thread.get("comments") or {}).get("nodes") or []:
+                if not isinstance(node, dict):
+                    continue
+                author_raw = node.get("author")
+                login = _author_login_lower(author_raw)
+                assoc = str(node.get("authorAssociation") or "").strip().upper()
+                if (
+                    login
+                    and assoc != "OWNER"
+                    and login not in verified_humans
+                    and login not in trusted_bots
+                    and f"{login}[bot]" not in trusted_bots
+                    and not _is_bot_author(author_raw)
+                ):
+                    candidate_logins.add(login)
+        for rev in pr_data.get("reviews") or []:
+            if not isinstance(rev, dict):
+                continue
+            author_raw = rev.get("author")
+            login = _author_login_lower(author_raw)
+            assoc = str(rev.get("authorAssociation") or "").strip().upper()
+            if (
+                login
+                and assoc != "OWNER"
+                and login not in verified_humans
+                and login not in trusted_bots
+                and f"{login}[bot]" not in trusted_bots
+                and not _is_bot_author(author_raw)
+            ):
+                candidate_logins.add(login)
+
+        for login in sorted(candidate_logins):
+            perm = _fetch_user_repo_permission(
+                owner_repo[0], owner_repo[1], login, cwd=cwd, cache=perm_cache
+            )
+            if perm in _WRITE_PERMISSIONS:
+                verified_humans.add(login)
 
     failed_logs: dict[str, str] = {}
     if fetch_failed_logs:
         for chk in _parse_status_rollup(pr_data.get("statusCheckRollup")):
             if chk.status == "failed" and chk.details_url and chk.details_url not in failed_logs:
-                failed_logs[chk.details_url] = _fetch_failed_check_log(chk.details_url, cwd=cwd)
+                failed_logs[chk.details_url] = _fetch_failed_check_log(
+                    chk.details_url, cwd=cwd, gh_repo=gh_repo
+                )
 
     return build_pr_snapshot(
         pr_data,
         review_threads=threads,
+        review_threads_complete=threads_complete,
+        review_threads_error=threads_error,
         trusted_bots=trusted_bots,
+        trusted_humans=frozenset(verified_humans),
         failed_logs_by_url=failed_logs,
     )
 
@@ -616,10 +1025,12 @@ def classify_pr_snapshot(snapshot: PrSnapshot) -> dict[str, Any]:
     Status values:
       - merged: PR is already merged
       - closed: PR is closed without merge
-      - needs_human: PR is draft or cross-repository (unsafe for automated push)
+      - needs_human: PR is draft, cross-repository, or blocked by branch/review policy
+      - inconclusive: review threads could not be completely retrieved (never merge_ready)
       - waiting: checks or review bots still running, or GitHub mergeability UNKNOWN
-      - needs_fix: failed checks, merge conflict, or unresolved actionable review findings
-      - merge_ready: mergeable, all checks green, 0 unresolved actionable findings
+      - needs_fix: failed checks, merge conflict, behind base, or unresolved actionable reviews
+      - merge_ready: MERGEABLE, mergeStateStatus CLEAN/HAS_HOOKS, all checks green,
+                     complete review thread inspection with 0 unresolved findings
     """
     if snapshot.state == "MERGED":
         return {"status": "merged", "reasons": []}
@@ -635,7 +1046,10 @@ def classify_pr_snapshot(snapshot: PrSnapshot) -> dict[str, Any]:
     has_conflict = (
         snapshot.mergeable == "CONFLICTING" or snapshot.merge_state_status == "DIRTY"
     )
-    mergeable_unknown = snapshot.mergeable == "UNKNOWN" and not has_conflict
+    is_behind = snapshot.merge_state_status == "BEHIND"
+    mergeable_unknown = (
+        snapshot.mergeable == "UNKNOWN" or snapshot.merge_state_status == "UNKNOWN"
+    ) and not has_conflict
 
     if pending_checks or snapshot.review_pending or mergeable_unknown:
         reasons: list[str] = []
@@ -650,6 +1064,8 @@ def classify_pr_snapshot(snapshot: PrSnapshot) -> dict[str, Any]:
     fix_reasons: list[str] = []
     if has_conflict:
         fix_reasons.append("merge_conflict")
+    if is_behind:
+        fix_reasons.append("behind_base_branch")
     if failed_checks:
         fix_reasons.append(f"failed_checks:{len(failed_checks)}")
     if snapshot.findings:
@@ -658,10 +1074,26 @@ def classify_pr_snapshot(snapshot: PrSnapshot) -> dict[str, Any]:
     if fix_reasons:
         return {"status": "needs_fix", "reasons": fix_reasons}
 
-    if snapshot.mergeable != "MERGEABLE":
+    if not snapshot.review_threads_complete:
+        return {
+            "status": "inconclusive",
+            "reasons": ["review_threads_incomplete"],
+        }
+
+    if snapshot.review_decision == "CHANGES_REQUESTED":
+        return {"status": "needs_human", "reasons": ["review_changes_requested"]}
+    if snapshot.review_decision == "REVIEW_REQUIRED":
+        return {"status": "needs_human", "reasons": ["review_required"]}
+
+    if (
+        snapshot.mergeable != "MERGEABLE"
+        or snapshot.merge_state_status not in _MERGE_READY_STATES
+    ):
         return {
             "status": "needs_human",
-            "reasons": [f"unmergeable_state:{snapshot.mergeable}:{snapshot.merge_state_status}"],
+            "reasons": [
+                f"unmergeable_state:{snapshot.mergeable}:{snapshot.merge_state_status}"
+            ],
         }
 
     return {"status": "merge_ready", "reasons": []}
@@ -680,7 +1112,6 @@ def _select_flow_and_agent(
             )
         chosen_flow_name = flow_name
     else:
-        # Prefer a non-observe_only all_specs flow, otherwise any non-observe_only flow, else first flow
         ranked = sorted(
             definition.flows.items(),
             key=lambda kv: (
@@ -733,14 +1164,16 @@ def _checks_to_verify_before_push(
     return [definition.checks[n] for n in names if n in definition.checks]
 
 
-_CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}\s|={7}$|>{7}\s)", re.MULTILINE)
-
-
 def _list_unmerged_files(worktree: Path) -> list[str]:
-    proc = git_run(worktree, "diff", "--name-only", "--diff-filter=U")
-    if proc.returncode != 0:
+    """Read unmerged paths using NUL-delimited Git output so non-ASCII names are never escaped."""
+    proc = git_run(worktree, "diff", "--name-only", "--diff-filter=U", "-z", text=False)
+    if proc.returncode != 0 or not proc.stdout:
         return []
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    return [
+        entry.decode("utf-8", errors="replace")
+        for entry in proc.stdout.split(b"\x00")
+        if entry
+    ]
 
 
 def _has_conflict_markers(file_path: Path) -> bool:
@@ -753,6 +1186,155 @@ def _has_conflict_markers(file_path: Path) -> bool:
     return _CONFLICT_MARKER_RE.search(content) is not None
 
 
+def _hash_worktree_entry(path: Path) -> str | None:
+    if path.is_symlink():
+        return "symlink:" + hashlib.sha256(str(path.readlink()).encode("utf-8")).hexdigest()
+    if path.is_file():
+        return "file:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return None
+
+
+def _list_diff_paths_z(worktree: Path, *diff_args: str) -> list[str]:
+    proc = git_run(worktree, "diff", "--name-only", "--no-renames", "-z", *diff_args, text=False)
+    if proc.returncode != 0 or not proc.stdout:
+        return []
+    return [
+        entry.decode("utf-8", errors="replace")
+        for entry in proc.stdout.split(b"\x00")
+        if entry
+    ]
+
+
+def _build_scrubbed_env(
+    *, kind: str, adapter: str | None = None
+) -> dict[str, str]:
+    """Strip host credentials and tokens before running untrusted PR-branch code."""
+    allowed_adapter_keys = set(
+        _ADAPTER_ALLOWED_ENV_KEYS.get(adapter or "", ()) if kind == "agent" else ()
+    )
+    scrubbed: dict[str, str] = {}
+    for key, val in os.environ.items():
+        upper = key.upper()
+        if key in allowed_adapter_keys:
+            scrubbed[key] = val
+            continue
+        if upper in _SENSITIVE_ENV_EXACT:
+            continue
+        if any(upper.startswith(pref) for pref in _SENSITIVE_ENV_PREFIXES):
+            continue
+        if any(sub in upper for sub in _SENSITIVE_ENV_SUBSTRINGS):
+            continue
+        scrubbed[key] = val
+    return scrubbed
+
+
+def _seatbelt_escape(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _resolve_pr_sandbox_prefix(
+    worktree: Path,
+    step_dir: Path,
+    *,
+    allow_network: bool,
+    adapter: str | None = None,
+    sandbox_cmd: tuple[str, ...] = (),
+    trust_pr_code: bool = False,
+) -> tuple[str, ...] | None:
+    """Resolve an OS/custom sandbox command prefix for executing PR-branch code.
+
+    Returns a prefix tuple (possibly empty ONLY when `trust_pr_code=True`), or
+    None when no sandbox is available and `trust_pr_code` is False (fail-closed).
+    """
+    if sandbox_cmd:
+        return tuple(sandbox_cmd)
+
+    wt_res = worktree.resolve()
+    step_res = step_dir.resolve()
+    home_res = Path.home().resolve()
+
+    if platform.system() == "Darwin" and shutil.which("sandbox-exec"):
+        write_allow_paths = [
+            wt_res,
+            step_res,
+            Path("/tmp"),
+            Path("/private/tmp"),
+            Path("/var/folders"),
+            Path("/private/var/folders"),
+        ]
+        # Git worktree metadata lives under the parent repo's .git/worktrees/<name>
+        git_file = wt_res / ".git"
+        if git_file.is_file():
+            try:
+                raw = git_file.read_text(encoding="utf-8").strip()
+                if raw.startswith("gitdir:"):
+                    gd = Path(raw.split(":", 1)[1].strip())
+                    if not gd.is_absolute():
+                        gd = (wt_res / gd).resolve()
+                    write_allow_paths.append(gd)
+            except OSError:
+                pass
+        if allow_network and adapter:
+            for rel in _ADAPTER_HOME_WRITE_SUBDIRS.get(adapter, ()):
+                write_allow_paths.append(home_res / rel)
+
+        allow_clauses = " ".join(
+            f'(subpath "{_seatbelt_escape(p)}")' for p in write_allow_paths
+        )
+        deny_clauses = " ".join(
+            f'(subpath "{_seatbelt_escape(home_res / rel)}")'
+            for rel in _DENIED_HOME_SUBDIRS
+        )
+        net_rule = "" if allow_network else "(deny network*)\n"
+        profile = (
+            "(version 1)\n"
+            "(allow default)\n"
+            f"{net_rule}"
+            "(deny file-write*)\n"
+            f'(allow file-write* {allow_clauses} (literal "/dev/null"))\n'
+            f"(deny file-read* {deny_clauses})\n"
+        )
+        return ("sandbox-exec", "-p", profile)
+
+    if platform.system() == "Linux" and shutil.which("bwrap"):
+        cmd = [
+            "bwrap",
+            "--ro-bind",
+            "/",
+            "/",
+            "--bind",
+            str(wt_res),
+            str(wt_res),
+            "--bind",
+            str(step_res),
+            str(step_res),
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+        ]
+        if not allow_network:
+            cmd.append("--unshare-net")
+        for rel in _DENIED_HOME_SUBDIRS:
+            target = home_res / rel
+            if target.is_dir():
+                cmd.extend(["--tmpfs", str(target)])
+        if allow_network and adapter:
+            for rel in _ADAPTER_HOME_WRITE_SUBDIRS.get(adapter, ()):
+                target = home_res / rel
+                if target.exists():
+                    cmd.extend(["--bind", str(target), str(target)])
+        cmd.append("--")
+        return tuple(cmd)
+
+    if trust_pr_code:
+        return ()
+
+    return None
+
+
 def _run_pr_fix_round(
     root: Path,
     snapshot: PrSnapshot,
@@ -763,16 +1345,35 @@ def _run_pr_fix_round(
     approval_branch: str,
     cumulative_cost_known: float,
     started_mono: float,
+    unaddressed_findings: list[PrReviewFinding],
+    sandbox_cmd: tuple[str, ...] = (),
+    trust_pr_code: bool = False,
 ) -> dict[str, Any]:
-    """Execute one isolated, guarded fix round for a PR and push only after local checks pass."""
+    """Execute one isolated, sandboxed, commit-before-verify fix round for a PR."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     round_dir = root / ".garden" / "runs" / f"pr-watch-{snapshot.number}-{stamp}-r{round_num}"
     round_dir.mkdir(parents=True, exist_ok=True)
     wt_root = root / ".garden" / "worktrees"
     wt_root.mkdir(parents=True, exist_ok=True)
     wt_path = wt_root / f"pr-{snapshot.number}-{stamp}-r{round_num}"
+    verify_wt_path = wt_root / f"pr-verify-{snapshot.number}-{stamp}-r{round_num}"
 
-    # Fetch the exact PR head and base branch from origin without touching the caller's checkout
+    # 1) Fetch PR head, base branch, AND approval_branch from origin (require approval_branch fetch!)
+    fetch_approval = git_run(
+        root,
+        "fetch",
+        "origin",
+        f"+refs/heads/{approval_branch}:refs/remotes/origin/{approval_branch}",
+    )
+    if fetch_approval.returncode != 0:
+        return {
+            "outcome": "needs_human",
+            "reason": "approval_branch_fetch_failed",
+            "detail": fetch_approval.stderr.strip() or fetch_approval.stdout.strip(),
+            "pushed": False,
+            "cost_usd": 0.0,
+        }
+
     fetch_head = git_run(
         root,
         "fetch",
@@ -787,18 +1388,27 @@ def _run_pr_fix_round(
             "pushed": False,
             "cost_usd": 0.0,
         }
-    git_run(
-        root,
-        "fetch",
-        "origin",
-        f"+refs/heads/{snapshot.base_ref_name}:refs/remotes/origin/{snapshot.base_ref_name}",
-    )
+
+    if snapshot.base_ref_name != approval_branch:
+        fetch_base = git_run(
+            root,
+            "fetch",
+            "origin",
+            f"+refs/heads/{snapshot.base_ref_name}:refs/remotes/origin/{snapshot.base_ref_name}",
+        )
+        if fetch_base.returncode != 0:
+            return {
+                "outcome": "needs_human",
+                "reason": "git_fetch_base_failed",
+                "detail": fetch_base.stderr.strip() or fetch_base.stdout.strip(),
+                "pushed": False,
+                "cost_usd": 0.0,
+            }
 
     add_wt = git_run(
         root, "worktree", "add", "--detach", str(wt_path), snapshot.head_ref_oid
     )
     if add_wt.returncode != 0:
-        # Fallback to origin/<head_ref_name> if head_ref_oid wasn't yet fetched directly
         add_wt = git_run(
             root,
             "worktree",
@@ -827,8 +1437,10 @@ def _run_pr_fix_round(
                 "cost_usd": 0.0,
             }
 
-        # Verify Trust Anchor ON THE PR WORKTREE so evaluation-criteria edits are detected!
-        anchor = verify_trust_anchor(wt_path, approval_branch=approval_branch)
+        # Verify Trust Anchor strictly against freshly fetched origin/<approval_branch>
+        anchor = verify_trust_anchor(
+            wt_path, approval_branch=approval_branch, prefer_remote=True
+        )
         if not anchor.specs_approved:
             return {
                 "outcome": "needs_human",
@@ -868,7 +1480,29 @@ def _run_pr_fix_round(
                 "cost_usd": 0.0,
             }
 
-        # Harness preflight inside the PR worktree before invoking real agents
+        # Fail-closed sandbox check BEFORE executing any PR-branch agent or check!
+        agent_step_dir = round_dir / "agent"
+        agent_step_dir.mkdir(parents=True, exist_ok=True)
+        agent_sandbox = _resolve_pr_sandbox_prefix(
+            wt_path,
+            agent_step_dir,
+            allow_network=agent_cfg.adapter != "mock",
+            adapter=agent_cfg.adapter,
+            sandbox_cmd=sandbox_cmd,
+            trust_pr_code=trust_pr_code,
+        )
+        if agent_sandbox is None:
+            return {
+                "outcome": "needs_human",
+                "reason": "pr_sandbox_unavailable",
+                "detail": (
+                    "no OS sandbox (sandbox-exec/bwrap) or --sandbox-cmd available to isolate PR code; "
+                    "configure --sandbox-cmd or pass --trust-pr-code only in an already isolated environment"
+                ),
+                "pushed": False,
+                "cost_usd": 0.0,
+            }
+
         if agent_cfg.adapter != "mock":
             harness_eval = evaluate_harness_requirements(
                 wt_path,
@@ -891,9 +1525,12 @@ def _run_pr_fix_round(
             snapshot.mergeable == "CONFLICTING"
             or snapshot.merge_state_status == "DIRTY"
         )
+        is_behind = snapshot.merge_state_status == "BEHIND"
         conflict_files: list[str] = []
         merged_base_cleanly = False
-        if has_conflict:
+        auto_merged_base_hashes: dict[str, str | None] = {}
+
+        if has_conflict or is_behind:
             merge_proc = git_run(
                 wt_path,
                 "merge",
@@ -903,6 +1540,9 @@ def _run_pr_fix_round(
             )
             if merge_proc.returncode == 0:
                 merged_base_cleanly = True
+                # Record cleanly auto-merged files from origin/<base> so guard distinguishes them
+                for rel in _list_diff_paths_z(wt_path, actual_head):
+                    auto_merged_base_hashes[rel] = _hash_worktree_entry(wt_path / rel)
             else:
                 conflict_files = _list_unmerged_files(wt_path)
                 if not conflict_files:
@@ -914,10 +1554,21 @@ def _run_pr_fix_round(
                         "pushed": False,
                         "cost_usd": 0.0,
                     }
+                conflict_set = set(conflict_files)
+                for rel in _list_diff_paths_z(wt_path, actual_head):
+                    if rel not in conflict_set:
+                        auto_merged_base_hashes[rel] = _hash_worktree_entry(wt_path / rel)
 
         failed_checks = [c.to_dict() for c in snapshot.checks if c.status == "failed"]
-        review_findings = [f.to_dict() for f in snapshot.findings]
-        needs_agent = bool(conflict_files or failed_checks or review_findings)
+        selected_findings_dicts, _ = select_pr_fix_findings(
+            [f.to_dict() for f in unaddressed_findings]
+        )
+        delivered_finding_versions = [
+            str(item["version_key"])
+            for item in selected_findings_dicts
+            if item.get("version_key")
+        ]
+        needs_agent = bool(conflict_files or failed_checks or selected_findings_dicts)
 
         step_cost_usd: float | None = 0.0
         agent_response: AgentResponse | None = None
@@ -958,18 +1609,30 @@ def _run_pr_fix_round(
                         "head_branch": snapshot.head_ref_name,
                         "conflict_files": conflict_files,
                         "failed_checks": failed_checks,
-                        "review_findings": review_findings,
+                        "review_findings": selected_findings_dicts,
                     }
                 },
             )
-            step_dir = round_dir / "agent"
+            scrubbed_agent_env = _build_scrubbed_env(
+                kind="agent", adapter=agent_cfg.adapter
+            )
             if agent_cfg.adapter == "mock":
                 agent_response, _ = run_mock_adapter(
-                    agent_cfg, request, worktree=wt_path, step_dir=step_dir
+                    agent_cfg,
+                    request,
+                    worktree=wt_path,
+                    step_dir=agent_step_dir,
+                    env_override=scrubbed_agent_env,
+                    command_prefix=agent_sandbox,
                 )
             else:
                 agent_response, _ = run_command_adapter(
-                    agent_cfg, request, worktree=wt_path, step_dir=step_dir
+                    agent_cfg,
+                    request,
+                    worktree=wt_path,
+                    step_dir=agent_step_dir,
+                    env_override=scrubbed_agent_env,
+                    command_prefix=agent_sandbox,
                 )
             step_cost_usd = agent_response.usage.cost_usd
 
@@ -991,7 +1654,6 @@ def _run_pr_fix_round(
                     "cost_usd": step_cost_usd,
                 }
 
-        # Ensure no unresolved merge conflict markers remain in any unmerged file
         remaining_unmerged = _list_unmerged_files(wt_path)
         still_conflicted = [
             rel for rel in remaining_unmerged if _has_conflict_markers(wt_path / rel)
@@ -1005,7 +1667,13 @@ def _run_pr_fix_round(
                 "cost_usd": step_cost_usd,
             }
 
-        # Deterministic post-agent guard against pre-fix head_oid
+        # Distinguish cleanly auto-merged base paths untouched by agent from agent edits/resolutions
+        untouched_base_paths = frozenset(
+            rel
+            for rel, expected_hash in auto_merged_base_hashes.items()
+            if _hash_worktree_entry(wt_path / rel) == expected_hash
+        )
+
         next_cum_cost = (
             round(cumulative_cost_known + step_cost_usd, 6)
             if step_cost_usd is not None
@@ -1022,6 +1690,7 @@ def _run_pr_fix_round(
             elapsed_sec=time.monotonic() - started_mono,
             baseline_untracked=baseline_untracked,
             ignore_prefixes=(".garden/runs/", ".garden/worktrees/"),
+            ignore_paths=untouched_base_paths,
         )
         if not guard_res.ok:
             return {
@@ -1041,36 +1710,11 @@ def _run_pr_fix_round(
                 "cost_usd": step_cost_usd,
             }
 
-        # Local verification checks MUST pass before pushing any commit to the PR!
-        checks_to_run = _checks_to_verify_before_push(definition, flow_cfg, eff_delegation)
-        for chk in checks_to_run:
-            chk_dir = round_dir / "checks" / chk.name
-            res = run_check(
-                chk,
-                worktree=wt_path,
-                run_id=round_dir.name,
-                step_id=f"pr-verify-{chk.name}",
-                step_dir=chk_dir,
-            )
-            if res.status == "inconclusive":
-                return {
-                    "outcome": "inconclusive",
-                    "reason": f"local_check_inconclusive:{chk.name}",
-                    "detail": res.detail,
-                    "pushed": False,
-                    "cost_usd": step_cost_usd,
-                }
-            if res.status != "passed":
-                return {
-                    "outcome": "local_check_failed",
-                    "reason": f"local_check_failed:{chk.name}",
-                    "detail": res.detail,
-                    "pushed": False,
-                    "cost_usd": step_cost_usd,
-                }
-
-        # Stage only guard-approved changes (and conflict-resolved paths) before committing
-        paths_to_stage = list(dict.fromkeys([*guard_res.changed_files, *remaining_unmerged]))
+        # 2) Freeze the exact candidate commit BEFORE running checks so checks cannot
+        #    mutate or stage files into the commit that gets pushed!
+        paths_to_stage = list(
+            dict.fromkeys([*guard_res.changed_files, *remaining_unmerged])
+        )
         if paths_to_stage:
             add_proc = git_run(wt_path, "add", "-A", "--", *paths_to_stage)
             if add_proc.returncode != 0:
@@ -1097,8 +1741,8 @@ def _run_pr_fix_round(
                     "cost_usd": step_cost_usd,
                 }
 
-        new_head = head_commit(wt_path)
-        if new_head == actual_head:
+        candidate_sha = head_commit(wt_path)
+        if candidate_sha == actual_head:
             return {
                 "outcome": "needs_human",
                 "reason": "no_commit_created",
@@ -1107,9 +1751,84 @@ def _run_pr_fix_round(
                 "cost_usd": step_cost_usd,
             }
 
-        # Non-force push only: never overwrite concurrent human commits
+        # 3) Checkout an immutable clean verification worktree at candidate_sha and verify there!
+        add_verify_wt = git_run(
+            root, "worktree", "add", "--detach", str(verify_wt_path), candidate_sha
+        )
+        if add_verify_wt.returncode != 0:
+            return {
+                "outcome": "needs_human",
+                "reason": "verify_worktree_create_failed",
+                "detail": add_verify_wt.stderr.strip() or add_verify_wt.stdout.strip(),
+                "pushed": False,
+                "cost_usd": step_cost_usd,
+            }
+
+        # Re-verify Trust Anchor on the frozen candidate commit (catches upstream criteria edits)
+        post_anchor = verify_trust_anchor(
+            verify_wt_path, approval_branch=approval_branch, prefer_remote=True
+        )
+        if post_anchor.evaluation_criteria_changed:
+            return {
+                "outcome": "needs_human",
+                "reason": "evaluation_criteria_changed_in_candidate",
+                "detail": "candidate commit differs from approved evaluation criteria on approval_branch",
+                "pushed": False,
+                "cost_usd": step_cost_usd,
+            }
+
+        scrubbed_check_env = _build_scrubbed_env(kind="check")
+        checks_to_run = _checks_to_verify_before_push(definition, flow_cfg, eff_delegation)
+        for chk in checks_to_run:
+            chk_dir = round_dir / "checks" / chk.name
+            chk_dir.mkdir(parents=True, exist_ok=True)
+            check_sandbox = _resolve_pr_sandbox_prefix(
+                verify_wt_path,
+                chk_dir,
+                allow_network=False,
+                sandbox_cmd=sandbox_cmd,
+                trust_pr_code=trust_pr_code,
+            )
+            if check_sandbox is None:
+                return {
+                    "outcome": "needs_human",
+                    "reason": "pr_sandbox_unavailable",
+                    "detail": "no sandbox available for local check verification",
+                    "pushed": False,
+                    "cost_usd": step_cost_usd,
+                }
+            res = run_check(
+                chk,
+                worktree=verify_wt_path,
+                run_id=round_dir.name,
+                step_id=f"pr-verify-{chk.name}",
+                step_dir=chk_dir,
+                env_override=scrubbed_check_env,
+                command_prefix=check_sandbox,
+            )
+            if res.status == "inconclusive":
+                return {
+                    "outcome": "inconclusive",
+                    "reason": f"local_check_inconclusive:{chk.name}",
+                    "detail": res.detail,
+                    "pushed": False,
+                    "cost_usd": step_cost_usd,
+                }
+            if res.status != "passed":
+                return {
+                    "outcome": "local_check_failed",
+                    "reason": f"local_check_failed:{chk.name}",
+                    "detail": res.detail,
+                    "pushed": False,
+                    "cost_usd": step_cost_usd,
+                }
+
+        # 4) Push the EXACT verified candidate_sha non-force!
         push_proc = git_run(
-            wt_path, "push", "origin", f"HEAD:refs/heads/{snapshot.head_ref_name}"
+            wt_path,
+            "push",
+            "origin",
+            f"{candidate_sha}:refs/heads/{snapshot.head_ref_name}",
         )
         if push_proc.returncode != 0:
             return {
@@ -1126,17 +1845,19 @@ def _run_pr_fix_round(
             "detail": (
                 agent_response.summary
                 if agent_response is not None and agent_response.summary
-                else f"pushed verified fix commit {new_head[:7]}"
+                else f"pushed verified fix commit {candidate_sha[:7]}"
             ),
             "pushed": True,
-            "new_head_oid": new_head,
+            "new_head_oid": candidate_sha,
             "changed_files": list(guard_res.changed_files),
+            "delivered_finding_versions": delivered_finding_versions,
             "cost_usd": step_cost_usd,
         }
     finally:
-        git_run(root, "worktree", "remove", "--force", str(wt_path))
-        if wt_path.exists():
-            shutil.rmtree(wt_path, ignore_errors=True)
+        for path_to_clean in (verify_wt_path, wt_path):
+            git_run(root, "worktree", "remove", "--force", str(path_to_clean))
+            if path_to_clean.exists():
+                shutil.rmtree(path_to_clean, ignore_errors=True)
 
 
 def watch_pr(
@@ -1152,33 +1873,55 @@ def watch_pr(
     dry_run: bool = False,
     once: bool = False,
     trusted_bots: frozenset[str] = DEFAULT_TRUSTED_REVIEW_BOTS,
+    trusted_reviewers: frozenset[str] = frozenset(),
+    sandbox_cmd: tuple[str, ...] = (),
+    trust_pr_code: bool = False,
 ) -> dict[str, Any]:
-    """Watch an open PR until merge_ready (never auto-merges) or bounded stop."""
+    """Watch an open PR until merge_ready (`garden:pr-ready`, never auto-merges) or bounded stop."""
     if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:
         raise ValueError(f"pr_number must be a positive integer, got {pr_number!r}")
-    if poll_interval_sec < 1:
-        raise ValueError("poll_interval_sec must be >= 1")
-    if max_rounds < 0:
-        raise ValueError("max_rounds must be >= 0")
-    if max_wait_sec < 1:
-        raise ValueError("max_wait_sec must be >= 1")
+    validate_watch_options(
+        poll_interval_sec=poll_interval_sec,
+        max_rounds=max_rounds,
+        max_wait_sec=max_wait_sec,
+    )
 
     root = repo_root(target_path)
+    origin_repo_id, gh_repo = _resolve_origin_repo(root)
     started_mono = time.monotonic()
     rounds_used = 0
     cumulative_cost_known = 0.0
     cost_unknown = False
     round_history: list[dict[str, Any]] = []
-    last_pushed_head: str | None = None
-    addressed_finding_ids: set[str] = set()
+    stale_pre_push_head: str | None = None
+    addressed_finding_versions: set[str] = set()
+    perm_cache: dict[str, str | None] = {}
 
     while True:
         snapshot = fetch_pr_snapshot(
             pr_number,
             cwd=root,
+            gh_repo=gh_repo,
             trusted_bots=trusted_bots,
+            trusted_reviewers=trusted_reviewers,
+            permission_cache=perm_cache,
             fetch_failed_logs=not dry_run,
         )
+
+        # Verify GitHub PR repository matches Git remote 'origin' before any mutation/push
+        pr_repo_id = parse_repo_identity(snapshot.url)
+        if origin_repo_id and pr_repo_id and origin_repo_id != pr_repo_id:
+            return {
+                "pr_number": pr_number,
+                "pr_url": snapshot.url,
+                "status": "needs_human",
+                "reasons": ["pr_origin_repo_mismatch"],
+                "detail": f"PR belongs to {pr_repo_id}, but git origin is {origin_repo_id}",
+                "rounds_used": rounds_used,
+                "rounds": round_history,
+                "exit_code": VERDICT_EXIT_CODES["NEEDS_HUMAN"],
+            }
+
         classification = classify_pr_snapshot(snapshot)
         status = classification["status"]
 
@@ -1216,8 +1959,39 @@ def watch_pr(
                 "exit_code": 1,
             }
 
+        if status == "inconclusive":
+            return {
+                "pr_number": pr_number,
+                "pr_url": snapshot.url,
+                "status": "inconclusive",
+                "reasons": classification["reasons"],
+                "detail": snapshot.review_threads_error,
+                "rounds_used": rounds_used,
+                "rounds": round_history,
+                "exit_code": VERDICT_EXIT_CODES["INCONCLUSIVE"],
+            }
+
+        # If GitHub hasn't yet refreshed past the pre-push HEAD we already fixed, wait!
+        if stale_pre_push_head is not None and snapshot.head_ref_oid == stale_pre_push_head:
+            if once or time.monotonic() - started_mono >= max_wait_sec:
+                return {
+                    "pr_number": pr_number,
+                    "pr_url": snapshot.url,
+                    "status": "waiting",
+                    "reasons": ["awaiting_refresh_after_push"],
+                    "rounds_used": rounds_used,
+                    "rounds": round_history,
+                    "exit_code": 0,
+                }
+            time.sleep(poll_interval_sec)
+            continue
+        if stale_pre_push_head is not None and snapshot.head_ref_oid != stale_pre_push_head:
+            stale_pre_push_head = None
+
         if status == "merge_ready":
-            label_res = _set_pr_managed_label(pr_number, "garden:harvest-ready", cwd=root)
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:pr-ready", cwd=root, gh_repo=gh_repo
+            )
             return {
                 "pr_number": pr_number,
                 "pr_url": snapshot.url,
@@ -1233,7 +2007,9 @@ def watch_pr(
             }
 
         if status == "needs_human":
-            label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+            )
             return {
                 "pr_number": pr_number,
                 "pr_url": snapshot.url,
@@ -1245,7 +2021,6 @@ def watch_pr(
                 "exit_code": VERDICT_EXIT_CODES["NEEDS_HUMAN"],
             }
 
-        # Waiting for CI / review bot / mergeable calculation
         if status == "waiting":
             if once:
                 return {
@@ -1258,13 +2033,17 @@ def watch_pr(
                     "exit_code": 0,
                 }
             if time.monotonic() - started_mono >= max_wait_sec:
-                label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+                label_res = _set_pr_managed_label(
+                    pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+                )
                 _post_pr_comment(
                     pr_number,
+                    f"<!-- garden:v1 kind=pr_watch_timeout pr={pr_number} -->\n"
                     f"### [Garden] PR 監視の上限時間に到達しました\n\n"
                     f"- 状態: `waiting` ({', '.join(classification['reasons'])})\n"
                     f"- 修正ラウンド: {rounds_used}/{max_rounds}\n",
                     cwd=root,
+                    gh_repo=gh_repo,
                 )
                 return {
                     "pr_number": pr_number,
@@ -1284,23 +2063,31 @@ def watch_pr(
             snapshot.mergeable == "CONFLICTING"
             or snapshot.merge_state_status == "DIRTY"
         )
+        is_behind = snapshot.merge_state_status == "BEHIND"
         failed_checks_now = [c for c in snapshot.checks if c.status == "failed"]
         unaddressed_findings = [
-            f for f in snapshot.findings if f.finding_id not in addressed_finding_ids
+            f
+            for f in snapshot.findings
+            if f.version_key not in addressed_finding_versions
         ]
         if (
             not has_conflict
+            and not is_behind
             and not failed_checks_now
             and snapshot.findings
             and not unaddressed_findings
         ):
-            label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+            )
             _post_pr_comment(
                 pr_number,
+                f"<!-- garden:v1 kind=pr_watch_awaiting_resolution pr={pr_number} -->\n"
                 f"### [Garden] 修正反映済み・レビュースレッドの解決待ちです（PR #{pr_number}）\n\n"
-                f"- CI は通過しており、未解決スレッド（{len(snapshot.findings)} 件）はすべて前回の修正ラウンドで対応済みです。\n"
+                f"- CI は通過しており、未解決スレッド（{len(snapshot.findings)} 件）の最新版はすべて前回の修正ラウンドで対応済みです。\n"
                 f"- 内容を確認のうえ、スレッドの解決または再レビューをお願いします。\n",
                 cwd=root,
+                gh_repo=gh_repo,
             )
             return {
                 "pr_number": pr_number,
@@ -1313,29 +2100,18 @@ def watch_pr(
                 "exit_code": VERDICT_EXIT_CODES["NEEDS_HUMAN"],
             }
 
-        if last_pushed_head is not None and snapshot.head_ref_oid == last_pushed_head:
-            # Guard against acting twice on the exact same commit if reviews/checks haven't refreshed
-            if once or time.monotonic() - started_mono >= max_wait_sec:
-                return {
-                    "pr_number": pr_number,
-                    "pr_url": snapshot.url,
-                    "status": "waiting",
-                    "reasons": ["awaiting_refresh_after_push"],
-                    "rounds_used": rounds_used,
-                    "rounds": round_history,
-                    "exit_code": 0,
-                }
-            time.sleep(poll_interval_sec)
-            continue
-
         if rounds_used >= max_rounds:
-            label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+            )
             _post_pr_comment(
                 pr_number,
+                f"<!-- garden:v1 kind=pr_watch_cap_reached pr={pr_number} -->\n"
                 f"### [Garden] 自動修正の上限回数（{max_rounds} 回）に到達しました\n\n"
                 f"- 残課題: {', '.join(classification['reasons'])}\n"
                 f"- 人の確認・判断をお願いします。\n",
                 cwd=root,
+                gh_repo=gh_repo,
             )
             return {
                 "pr_number": pr_number,
@@ -1358,6 +2134,9 @@ def watch_pr(
             approval_branch=approval_branch,
             cumulative_cost_known=cumulative_cost_known,
             started_mono=started_mono,
+            unaddressed_findings=unaddressed_findings,
+            sandbox_cmd=sandbox_cmd,
+            trust_pr_code=trust_pr_code,
         )
         round_history.append(round_res)
         step_cost = round_res.get("cost_usd")
@@ -1368,9 +2147,10 @@ def watch_pr(
 
         outcome = round_res["outcome"]
         if outcome == "pushed":
-            last_pushed_head = str(round_res.get("new_head_oid") or "")
-            for finding in snapshot.findings:
-                addressed_finding_ids.add(finding.finding_id)
+            # Wait only while GitHub still reports the PRE-PUSH HEAD; new HEAD results proceed immediately!
+            stale_pre_push_head = snapshot.head_ref_oid
+            for vkey in round_res.get("delivered_finding_versions") or []:
+                addressed_finding_versions.add(str(vkey))
             if once:
                 return {
                     "pr_number": pr_number,
@@ -1409,7 +2189,9 @@ def watch_pr(
             continue
 
         if outcome == "inconclusive":
-            label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+            )
             return {
                 "pr_number": pr_number,
                 "pr_url": snapshot.url,
@@ -1424,14 +2206,18 @@ def watch_pr(
 
         if outcome == "local_check_failed":
             if once or rounds_used >= max_rounds:
-                label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+                label_res = _set_pr_managed_label(
+                    pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+                )
                 _post_pr_comment(
                     pr_number,
+                    f"<!-- garden:v1 kind=pr_watch_local_failed pr={pr_number} -->\n"
                     f"### [Garden] PR 自動修正後のローカル検証に失敗しました\n\n"
                     f"- 理由: `{round_res.get('reason')}`\n"
                     f"- 詳細: {round_res.get('detail')}\n"
                     f"- 未検証のコミットは push していません。\n",
                     cwd=root,
+                    gh_repo=gh_repo,
                 )
                 return {
                     "pr_number": pr_number,
@@ -1446,13 +2232,15 @@ def watch_pr(
                 }
             continue
 
-        # needs_human
-        label_res = _set_pr_managed_label(pr_number, "garden:needs-human", cwd=root)
+        label_res = _set_pr_managed_label(
+            pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+        )
         q = round_res.get("question")
         if isinstance(q, dict) and q.get("prompt"):
             opts = q.get("options") or []
             opts_md = "\n".join(f"  - {o}" for o in opts) if isinstance(opts, list) and opts else ""
             body = (
+                f"<!-- garden:v1 kind=pr_watch_spec_question pr={pr_number} -->\n"
                 f"### [Garden] 仕様の判断が必要です（PR #{pr_number}）\n\n"
                 f"- **問い**: {q['prompt']}\n"
                 + (f"- **選択肢**:\n{opts_md}\n" if opts_md else "")
@@ -1460,11 +2248,12 @@ def watch_pr(
             )
         else:
             body = (
+                f"<!-- garden:v1 kind=pr_watch_needs_human pr={pr_number} -->\n"
                 f"### [Garden] 人の確認が必要です（PR #{pr_number}）\n\n"
                 f"- **理由**: `{round_res.get('reason')}`\n"
                 f"- **詳細**: {round_res.get('detail') or ''}\n"
             )
-        _post_pr_comment(pr_number, body, cwd=root)
+        _post_pr_comment(pr_number, body, cwd=root, gh_repo=gh_repo)
         return {
             "pr_number": pr_number,
             "pr_url": snapshot.url,

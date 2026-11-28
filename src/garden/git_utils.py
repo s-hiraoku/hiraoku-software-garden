@@ -65,11 +65,13 @@ def list_remotes(path: Path) -> dict[str, str]:
     return remotes
 
 
-def resolve_branch_commit(path: Path, branch: str) -> tuple[str, str]:
+def resolve_branch_commit(
+    path: Path, branch: str, *, prefer_remote: bool = False
+) -> tuple[str, str]:
     """Resolve an approval branch name strictly to refs/heads/<branch> or refs/remotes/origin/<branch>.
 
-    Rejects raw symbolic refs (such as HEAD) or path traversal so an untrusted
-    branch cannot spoof the Trust Anchor.
+    When `prefer_remote=True`, resolves strictly to `refs/remotes/origin/<branch>`
+    so a stale local branch cannot override a freshly fetched remote approval branch.
     """
     if (
         not branch
@@ -79,10 +81,14 @@ def resolve_branch_commit(path: Path, branch: str) -> tuple[str, str]:
         or any(ch.isspace() for ch in branch)
     ):
         raise GitError(f"invalid approval branch name '{branch}'")
-    candidates = [
-        f"refs/heads/{branch}",
-        f"refs/remotes/origin/{branch}",
-    ]
+    candidates = (
+        [f"refs/remotes/origin/{branch}"]
+        if prefer_remote
+        else [
+            f"refs/heads/{branch}",
+            f"refs/remotes/origin/{branch}",
+        ]
+    )
     for candidate in candidates:
         sha = try_git_output(path, "rev-parse", "--verify", f"{candidate}^{{commit}}")
         if sha:

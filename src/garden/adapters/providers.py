@@ -23,6 +23,37 @@ MAX_ISSUE_BODY_CHARS = 12000
 MAX_ISSUE_COMMENTS_CHARS = 4000
 
 
+def select_pr_fix_findings(
+    findings: list[dict[str, Any]], *, max_chars: int = MAX_ISSUE_BODY_CHARS
+) -> tuple[list[dict[str, Any]], bool]:
+    """Select the prefix of review findings fitting within max_chars.
+
+    Returns `(included_findings, was_truncated)` so callers can record ONLY the
+    findings actually delivered to the agent prompt.
+    """
+    included: list[dict[str, Any]] = []
+    used_chars = 0
+    truncated = False
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        fbody = str(finding.get("body") or "").strip()
+        if not fbody:
+            continue
+        if included and used_chars + len(fbody) > max_chars:
+            truncated = True
+            break
+        if len(fbody) > max_chars:
+            clipped = dict(finding)
+            clipped["body"] = fbody[:max_chars] + "\n...(truncated)..."
+            included.append(clipped)
+            truncated = True
+            break
+        included.append(finding)
+        used_chars += len(fbody)
+    return included, truncated
+
+
 def _fence_block(text: str, lang: str = "markdown") -> list[str]:
     """Wrap untrusted text in a Markdown code fence longer than any contained backtick run."""
     longest_ticks = max(
@@ -169,26 +200,21 @@ def build_agent_prompt(request: AgentRequest) -> str:
 
         review_findings = pr_fix_ctx.get("review_findings") or []
         if isinstance(review_findings, list) and review_findings:
-            sections.extend(["", "### Unresolved Review Findings"])
-            used_review_chars = 0
-            for idx, finding in enumerate(review_findings, start=1):
-                if not isinstance(finding, dict):
-                    continue
-                author = " ".join(str(finding.get("author") or "reviewer").split())
-                assoc = " ".join(str(finding.get("author_association") or "").split())
-                fpath = " ".join(str(finding.get("path") or "").split())
-                fline = finding.get("line")
-                fbody = str(finding.get("body") or "").strip()
-                if not fbody:
-                    continue
-                if used_review_chars + len(fbody) > MAX_ISSUE_BODY_CHARS:
-                    sections.append("...(additional review findings truncated)...")
-                    break
-                loc = f" at `{fpath}:{fline}`" if fpath and fline else (f" at `{fpath}`" if fpath else "")
-                assoc_note = f" ({assoc})" if assoc else ""
-                sections.append(f"#### Finding {idx} by `{author}`{assoc_note}{loc}")
-                sections.extend(_fence_block(fbody, "markdown"))
-                used_review_chars += len(fbody)
+            selected_findings, was_truncated = select_pr_fix_findings(review_findings)
+            if selected_findings:
+                sections.extend(["", "### Unresolved Review Findings"])
+                for idx, finding in enumerate(selected_findings, start=1):
+                    author = " ".join(str(finding.get("author") or "reviewer").split())
+                    assoc = " ".join(str(finding.get("author_association") or "").split())
+                    fpath = " ".join(str(finding.get("path") or "").split())
+                    fline = finding.get("line")
+                    fbody = str(finding.get("body") or "").strip()
+                    loc = f" at `{fpath}:{fline}`" if fpath and fline else (f" at `{fpath}`" if fpath else "")
+                    assoc_note = f" ({assoc})" if assoc else ""
+                    sections.append(f"#### Finding {idx} by `{author}`{assoc_note}{loc}")
+                    sections.extend(_fence_block(fbody, "markdown"))
+                if was_truncated:
+                    sections.append("...(additional review findings deferred to next round)...")
 
     has_failure_ctx = isinstance(request.context, dict) and any(
         request.context.get(k)

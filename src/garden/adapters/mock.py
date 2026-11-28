@@ -15,6 +15,15 @@ def run_mock_adapter(
     *,
     worktree: Path,
     step_dir: Path,
+    env_override: dict[str, str] | None = None,
+    command_prefix: tuple[str, ...] = (),
 ) -> tuple[AgentResponse, int | None]:
     """Run a configured mock script using the exact same JSON protocol as external CLIs."""
-    return run_command_adapter(agent, request, worktree=worktree, step_dir=step_dir)
+    return run_command_adapter(
+        agent,
+        request,
+        worktree=worktree,
+        step_dir=step_dir,
+        env_override=env_override,
+        command_prefix=command_prefix,
+    )

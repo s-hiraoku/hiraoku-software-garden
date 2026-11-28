@@ -250,6 +250,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="additional bot login allowed to trigger review fixes (repeatable)",
     )
+    pw_cmd.add_argument(
+        "--trusted-reviewer",
+        action="append",
+        default=[],
+        help="explicit human login allowed to trigger review fixes regardless of permission lookup (repeatable)",
+    )
+    pw_cmd.add_argument(
+        "--sandbox-cmd",
+        action="append",
+        default=[],
+        help="custom sandbox command prefix tokens (repeatable) wrapping PR-branch checks and agents",
+    )
+    pw_cmd.add_argument(
+        "--trust-pr-code",
+        action="store_true",
+        help="explicitly allow running PR-branch checks/agents without an OS sandbox (use only inside isolated runners)",
+    )
     pw_cmd.add_argument("--json", action="store_true", dest="as_json")
 
     work_cmd = commands.add_parser(
@@ -279,6 +296,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="additional bot login allowed to trigger PR review fixes (repeatable)",
+    )
+    work_cmd.add_argument(
+        "--trusted-reviewer",
+        action="append",
+        default=[],
+        help="explicit human login allowed to trigger PR review fixes (repeatable)",
+    )
+    work_cmd.add_argument(
+        "--sandbox-cmd",
+        action="append",
+        default=[],
+        help="custom sandbox command prefix tokens (repeatable) for pr-watch execution",
+    )
+    work_cmd.add_argument(
+        "--trust-pr-code",
+        action="store_true",
+        help="explicitly allow running PR-branch code without an OS sandbox during pr-watch",
     )
     work_cmd.add_argument("--json", action="store_true", dest="as_json")
 
@@ -741,6 +775,10 @@ def main(argv: list[str] | None = None) -> int:
         trusted_bots = DEFAULT_TRUSTED_REVIEW_BOTS | frozenset(
             b.strip().lower() for b in (args.trusted_review_bot or []) if b.strip()
         )
+        trusted_reviewers = frozenset(
+            u.strip().lower() for u in (args.trusted_reviewer or []) if u.strip()
+        )
+        sandbox_cmd = tuple(tok for tok in (args.sandbox_cmd or []) if tok)
         try:
             watch_res = watch_pr(
                 args.target,
@@ -754,6 +792,9 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 once=args.once,
                 trusted_bots=trusted_bots,
+                trusted_reviewers=trusted_reviewers,
+                sandbox_cmd=sandbox_cmd,
+                trust_pr_code=args.trust_pr_code,
             )
         except (DefinitionError, GitError, ValueError, OSError) as error:
             print(f"error: {error}", file=sys.stderr)
@@ -775,6 +816,10 @@ def main(argv: list[str] | None = None) -> int:
         trusted_bots = DEFAULT_TRUSTED_REVIEW_BOTS | frozenset(
             b.strip().lower() for b in (args.trusted_review_bot or []) if b.strip()
         )
+        trusted_reviewers = frozenset(
+            u.strip().lower() for u in (args.trusted_reviewer or []) if u.strip()
+        )
+        sandbox_cmd = tuple(tok for tok in (args.sandbox_cmd or []) if tok)
         post_updates = (not args.no_issue_updates) and (args.issue_file is None)
         try:
             work_res = work_issue(
@@ -793,6 +838,9 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
                 post_issue_updates=post_updates,
                 trusted_bots=trusted_bots,
+                trusted_reviewers=trusted_reviewers,
+                sandbox_cmd=sandbox_cmd,
+                trust_pr_code=args.trust_pr_code,
             )
         except (DefinitionError, GitError, ValueError, OSError) as error:
             print(f"error: {error}", file=sys.stderr)

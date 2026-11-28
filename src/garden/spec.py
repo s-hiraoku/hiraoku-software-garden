@@ -186,6 +186,7 @@ def verify_trust_anchor(
     definition_rel_path: str = GARDEN_DEF_REL_PATH,
     *,
     approval_branch: str = "main",
+    prefer_remote: bool = False,
 ) -> TrustAnchorResult:
     """Resolve and validate approved garden definition and specs against a trusted approval_branch.
 
@@ -201,7 +202,9 @@ def verify_trust_anchor(
     head_def_blob_sha = blob_sha_at(repo_root, "HEAD", definition_rel_path)
 
     try:
-        _, approval_commit = resolve_branch_commit(repo_root, approval_branch)
+        _, approval_commit = resolve_branch_commit(
+            repo_root, approval_branch, prefer_remote=prefer_remote
+        )
     except GitError as error:
         return TrustAnchorResult(
             active_definition=head_def,
