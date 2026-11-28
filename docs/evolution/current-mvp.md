@@ -26,7 +26,7 @@
 | **③ 実行管理** | 必須スキルと必須 MCP を含むハーネス環境を検証したうえで、着手順・分割・対象の版・権限を管理して隔離環境で実行する | 宣言的ステートマシン、`git worktree` 隔離と `verified_commit` 永続化、委譲厳格化バリデーター、必須スキル・必須 MCP の設定確認と任意の実接続確認（`--probe-mcp`）、`garden harness guide` / `sync-pstack`、Preflight `INCONCLUSIVE` 停止を実装済み | 仕事の自動分割と優先順位付けは未実装（MVP-7）で、単一リポジトリ・単一フロー単位に割り切っている |
 | **④ 調査・実装・修正** | 許可範囲内で再現、調査、実装、修正を行い、仕様判断が必要なら人へ問いを返す | `codex` / `claude` / `gemini` / `antigravity` / `custom` / `mock` の各アダプターと事後ガード（`guard.py`）を実装済み | 結合テストとモック検証は完了済みだが、実対象リポジトリでの実エージェントによる `fix_and_retry` 本番運用は MVP-7 で扱う |
 | **⑤ 検証** | 必須チェック、実挙動シナリオ、形式検証を同じ版で実行し、2 層判定と構造化証拠を残す | `check` / `formal_check` の 2 層判定、`required_evidence` / `formal.json` 検証、ナーサリー自身の有界全状態探索を実装済み | 対象リポジトリ側の形式検証適用は MVP-8 で扱う。複数リポジトリをまたぐ結合シナリオも未対応 |
-| **⑥ 反映・再修正・人への引き渡し** | 委譲範囲内の自動反映、再修正、証拠付きの結実通知、例外のエスカレーションを自律的に振り分ける | `garden report`（要約、HTML マーカー、ラベル自動作成、Artifacts URL）と `garden reflect`（祖先および差分検証付き PR 作成・自動マージゲート）を実装済み | 実対象リポジトリは安全な `observe_only` で運用中。`propose_pr` / `auto_merge` 実運用は MVP-7、結実後のリリース・デプロイ連携は MVP-8 で扱う |
+| **⑥ 反映・再修正・人への引き渡し** | 委譲範囲内の自動反映、再修正、証拠付きの結実通知、例外のエスカレーションを自律的に振り分ける | `garden report`（要約、HTML マーカー、ラベル自動作成、Artifacts URL）、`garden reflect`（祖先および差分検証・リポジトリ照合付き PR 作成・自動マージゲート）、`garden pr-watch`（CI・コンフリクト・レビュー指摘の監視と隔離自動修正）、`garden work`（Issue → マージ可能 PR の 1 コマンド実行）を実装済み | 実対象リポジトリは安全な `observe_only` で運用中。`propose_pr` / `auto_merge` および `garden work` / `pr-watch` の実対象リポジトリ実証は MVP-7、結実後のリリース・デプロイ連携は MVP-8 で扱う |
 | **⑦ 工程そのものの改善** | 介入記録とメトリクスから再発防止を検証し、有効な知見を共通テンプレートへ還元する | `garden feedback`（CLI / `/garden feedback` コメント解析・PR 永続化）、`garden metrics`、`garden upgrade`、`garden template-gate` を実装済み | 介入から対象固有のハーネス改善までの 1 周は HAB で実証済み。複数ガーデンから共通テンプレート `v2` への還元実績は MVP-8 で扱う |
 
 ---

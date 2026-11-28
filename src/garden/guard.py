@@ -125,14 +125,21 @@ def verify_post_agent_guard(
     elapsed_sec: float = 0.0,
     baseline_untracked: dict[str, str] | None = None,
     ignore_prefixes: tuple[str, ...] = (),
+    ignore_paths: frozenset[str] = frozenset(),
 ) -> GuardResult:
     violations: list[str] = []
 
-    ancestor_ok, changed_files = collect_changes_since(
+    ancestor_ok, raw_changed_files = collect_changes_since(
         worktree,
         target_commit,
         baseline_untracked=baseline_untracked,
         ignore_prefixes=ignore_prefixes,
+    )
+    norm_ignored = {_strip_dot_slash(p) for p in ignore_paths}
+    changed_files = (
+        tuple(p for p in raw_changed_files if _strip_dot_slash(p) not in norm_ignored)
+        if norm_ignored
+        else raw_changed_files
     )
     if not ancestor_ok:
         violations.append(

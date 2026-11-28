@@ -30,6 +30,7 @@ from garden.harness_setup import (
 )
 from garden.issues import load_issue_context_file
 from garden.metrics import collect_garden_metrics
+from garden.pr_watch import DEFAULT_TRUSTED_REVIEW_BOTS, watch_pr
 from garden.publish import reflect_run
 from garden.release_gate import run_template_release_gate
 from garden.report import (
@@ -41,6 +42,7 @@ from garden.report import (
 from garden.spec import SpecError
 from garden.spec_diff import analyze_spec_diff
 from garden.templates import apply_upgrade, init_garden, plan_upgrade
+from garden.work import work_issue
 
 
 def _default_nursery_home() -> Path:
@@ -226,6 +228,93 @@ def build_parser() -> argparse.ArgumentParser:
     ref_cmd.add_argument("run_dir", type=Path)
     ref_cmd.add_argument("--base", default="main")
     ref_cmd.add_argument("--execute", action="store_true")
+
+    # PR watch & single-Issue orchestrator
+    pw_cmd = commands.add_parser(
+        "pr-watch",
+        help="monitor a PR for CI failures, conflicts, and reviews and apply guarded fixes until mergeable (never auto-merges)",
+    )
+    pw_cmd.add_argument("pr_number", type=int)
+    pw_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    pw_cmd.add_argument("--flow", default=None, help="flow used for delegation policy and local verification")
+    pw_cmd.add_argument("--agent", default=None, help="agent name in .garden/garden.toml")
+    pw_cmd.add_argument("--approval-branch", default="main")
+    pw_cmd.add_argument("--poll-interval", type=int, default=30)
+    pw_cmd.add_argument("--max-rounds", type=int, default=3)
+    pw_cmd.add_argument("--max-wait-sec", type=int, default=1800)
+    pw_cmd.add_argument("--dry-run", action="store_true")
+    pw_cmd.add_argument("--once", action="store_true")
+    pw_cmd.add_argument(
+        "--trusted-review-bot",
+        action="append",
+        default=[],
+        help="additional bot login allowed to trigger review fixes (repeatable)",
+    )
+    pw_cmd.add_argument(
+        "--trusted-reviewer",
+        action="append",
+        default=[],
+        help="explicit human login allowed to trigger review fixes regardless of permission lookup (repeatable)",
+    )
+    pw_cmd.add_argument(
+        "--sandbox-cmd",
+        action="append",
+        default=[],
+        help="custom sandbox command prefix tokens (repeatable) wrapping PR-branch checks and agents",
+    )
+    pw_cmd.add_argument(
+        "--trust-pr-code",
+        action="store_true",
+        help="explicitly allow running PR-branch checks/agents without an OS sandbox (use only inside isolated runners)",
+    )
+    pw_cmd.add_argument("--json", action="store_true", dest="as_json")
+
+    work_cmd = commands.add_parser(
+        "work",
+        help="run Issue -> verified PR -> PR watch until mergeable in one command (never auto-merges)",
+    )
+    work_cmd.add_argument("--target", type=Path, default=Path.cwd())
+    work_cmd.add_argument("--issue", type=int, default=None)
+    work_cmd.add_argument("--issue-file", type=Path, default=None)
+    work_cmd.add_argument("--flow", default=None)
+    work_cmd.add_argument("--agent", default=None)
+    work_cmd.add_argument("--base", default="main")
+    work_cmd.add_argument("--approval-branch", default="main")
+    work_cmd.add_argument("--no-watch", action="store_true")
+    work_cmd.add_argument("--watch-poll-sec", type=int, default=30)
+    work_cmd.add_argument("--watch-max-rounds", type=int, default=3)
+    work_cmd.add_argument("--watch-max-wait-sec", type=int, default=1800)
+    work_cmd.add_argument("--dry-run", action="store_true")
+    work_cmd.add_argument("--force", action="store_true")
+    work_cmd.add_argument(
+        "--no-issue-updates",
+        action="store_true",
+        help="skip posting comments/labels to the GitHub Issue",
+    )
+    work_cmd.add_argument(
+        "--trusted-review-bot",
+        action="append",
+        default=[],
+        help="additional bot login allowed to trigger PR review fixes (repeatable)",
+    )
+    work_cmd.add_argument(
+        "--trusted-reviewer",
+        action="append",
+        default=[],
+        help="explicit human login allowed to trigger PR review fixes (repeatable)",
+    )
+    work_cmd.add_argument(
+        "--sandbox-cmd",
+        action="append",
+        default=[],
+        help="custom sandbox command prefix tokens (repeatable) for pr-watch execution",
+    )
+    work_cmd.add_argument(
+        "--trust-pr-code",
+        action="store_true",
+        help="explicitly allow running PR-branch code without an OS sandbox during pr-watch",
+    )
+    work_cmd.add_argument("--json", action="store_true", dest="as_json")
 
     # Phase-7 intervention feedback
     fb_cmd = commands.add_parser("feedback", help="record or summarize human interventions")
@@ -681,6 +770,93 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(json.dumps(diff_report, ensure_ascii=False, indent=2))
         return 1 if diff_report["impact"]["requires_garden_update"] else 0
+
+    if args.action == "pr-watch":
+        trusted_bots = DEFAULT_TRUSTED_REVIEW_BOTS | frozenset(
+            b.strip().lower() for b in (args.trusted_review_bot or []) if b.strip()
+        )
+        trusted_reviewers = frozenset(
+            u.strip().lower() for u in (args.trusted_reviewer or []) if u.strip()
+        )
+        sandbox_cmd = tuple(tok for tok in (args.sandbox_cmd or []) if tok)
+        try:
+            watch_res = watch_pr(
+                args.target,
+                args.pr_number,
+                flow_name=args.flow,
+                agent_name=args.agent,
+                approval_branch=args.approval_branch,
+                poll_interval_sec=args.poll_interval,
+                max_rounds=args.max_rounds,
+                max_wait_sec=args.max_wait_sec,
+                dry_run=args.dry_run,
+                once=args.once,
+                trusted_bots=trusted_bots,
+                trusted_reviewers=trusted_reviewers,
+                sandbox_cmd=sandbox_cmd,
+                trust_pr_code=args.trust_pr_code,
+            )
+        except (DefinitionError, GitError, ValueError, OSError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        if args.as_json:
+            print(json.dumps(watch_res, ensure_ascii=False, indent=2))
+        else:
+            reasons = ", ".join(watch_res.get("reasons") or []) or "none"
+            print(
+                f"pr=#{watch_res['pr_number']} status={watch_res['status']} "
+                f"rounds={watch_res.get('rounds_used', 0)} reasons={reasons}"
+            )
+        return int(watch_res.get("exit_code", 0))
+
+    if args.action == "work":
+        trusted_bots = DEFAULT_TRUSTED_REVIEW_BOTS | frozenset(
+            b.strip().lower() for b in (args.trusted_review_bot or []) if b.strip()
+        )
+        trusted_reviewers = frozenset(
+            u.strip().lower() for u in (args.trusted_reviewer or []) if u.strip()
+        )
+        sandbox_cmd = tuple(tok for tok in (args.sandbox_cmd or []) if tok)
+        post_updates = (not args.no_issue_updates) and (args.issue_file is None)
+        try:
+            work_res = work_issue(
+                args.target,
+                issue_number=args.issue,
+                issue_file=args.issue_file,
+                flow_name=args.flow,
+                agent_name=args.agent,
+                base_branch=args.base,
+                approval_branch=args.approval_branch,
+                watch=not args.no_watch,
+                watch_poll_sec=args.watch_poll_sec,
+                watch_max_rounds=args.watch_max_rounds,
+                watch_max_wait_sec=args.watch_max_wait_sec,
+                dry_run=args.dry_run,
+                force=args.force,
+                post_issue_updates=post_updates,
+                trusted_bots=trusted_bots,
+                trusted_reviewers=trusted_reviewers,
+                sandbox_cmd=sandbox_cmd,
+                trust_pr_code=args.trust_pr_code,
+            )
+        except (DefinitionError, GitError, ValueError, OSError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        if args.as_json:
+            print(json.dumps(work_res, ensure_ascii=False, indent=2))
+        else:
+            watch_status = (work_res.get("watch") or {}).get("status") or "-"
+            print(
+                f"issue=#{work_res.get('issue_number')} verdict={work_res['verdict']} "
+                f"pr={work_res.get('pr_url') or '-'} watch={watch_status}"
+            )
+        return int(work_res.get("exit_code", 0))
 
     parser.error(f"unknown action: {args.action}")
     return 2

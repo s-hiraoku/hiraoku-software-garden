@@ -325,10 +325,17 @@ def reflect_run(
     base_branch: str = "main",
     execute: bool = False,
     cwd: Path | None = None,
+    allow_auto_merge: bool = True,
 ) -> dict[str, Any]:
     """Evaluate the reflection gate for run_dir, optionally creating a PR (and enabling auto-merge)."""
     run_data = load_run_data(run_dir)
     decision = evaluate_reflect_gate(run_data)
+    if not allow_auto_merge and decision.allowed_action == "auto_merge":
+        decision = replace(
+            decision,
+            allowed_action="propose_pr",
+            reasons=(*decision.reasons, "auto_merge_disabled_by_caller"),
+        )
     git_root = _find_git_root(cwd) if cwd is not None else _find_git_root(run_dir)
     git_verified = False
 

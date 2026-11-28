@@ -27,6 +27,8 @@ def run_command_adapter(
     *,
     worktree: Path,
     step_dir: Path,
+    env_override: dict[str, str] | None = None,
+    command_prefix: tuple[str, ...] = (),
 ) -> tuple[AgentResponse, int | None]:
     step_dir.mkdir(parents=True, exist_ok=True)
     req_path = step_dir / "request.json"
@@ -42,7 +44,7 @@ def run_command_adapter(
     prompt_text = build_agent_prompt(request)
     prompt_path.write_text(prompt_text, encoding="utf-8")
 
-    env = os.environ.copy()
+    env = dict(env_override) if env_override is not None else os.environ.copy()
     env["GARDEN_AGENT_REQUEST"] = str(req_path.resolve())
     env["GARDEN_AGENT_RESPONSE"] = str(res_path.resolve())
     env["GARDEN_AGENT_PROMPT"] = str(prompt_path.resolve())
@@ -52,7 +54,7 @@ def run_command_adapter(
 
     try:
         proc = subprocess.run(
-            argv,
+            [*command_prefix, *argv],
             cwd=worktree,
             env=env,
             input=stdin_text,
