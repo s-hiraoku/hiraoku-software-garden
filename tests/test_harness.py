@@ -320,3 +320,261 @@ check = "c1"
             self.assertEqual(res.verdict, "NEEDS_HUMAN")
             self.assertEqual(res.exit_code, 4)
             self.assertEqual(res.run_data["escalation"]["reason"], "spec_not_approved")
+
+    def test_missing_or_invalid_pstack_manifest_blocks_when_core_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo_obs = _make_garden_repo(base / "obs", with_real_agent=False)
+            repo_agent = _make_garden_repo(base / "agt", with_real_agent=True)
+            empty_nursery = base / "empty-nursery"
+            empty_nursery.mkdir()
+            broken_nursery = base / "broken-nursery"
+            (broken_nursery / "harnesses").mkdir(parents=True)
+            (broken_nursery / "harnesses" / "pstack.toml").write_text(
+                "not = [valid toml", encoding="utf-8"
+            )
+
+            # Advisory observe_only mode warns without failing when manifest is missing
+            code_adv, items_adv = run_doctor(
+                repo_obs, skip_network=True, nursery_root=empty_nursery
+            )
+            self.assertEqual(code_adv, 0)
+            self.assertEqual(
+                {i.id: i for i in items_adv}["required_skills"].status, "warn"
+            )
+
+            # Strict doctor & real-agent doctor block when manifest is missing or corrupt
+            for bad_nursery in (empty_nursery, broken_nursery):
+                code_strict, items_strict = run_doctor(
+                    repo_obs,
+                    skip_network=True,
+                    nursery_root=bad_nursery,
+                    strict_harness=True,
+                )
+                self.assertEqual(code_strict, 1)
+                self.assertEqual(
+                    {i.id: i for i in items_strict}["required_skills"].status, "error"
+                )
+
+                code_agt, items_agt = run_doctor(
+                    repo_agent, skip_network=True, nursery_root=bad_nursery
+                )
+                self.assertEqual(code_agt, 1)
+                self.assertEqual(
+                    {i.id: i for i in items_agt}["required_skills"].status, "error"
+                )
+
+            # Real-agent preflight blocks with INCONCLUSIVE when manifest cannot be loaded
+            with patch("garden.harness.load_pstack_manifest", return_value=None):
+                run_res = run_flow(repo_agent, "verify", force=True)
+            self.assertEqual(run_res.verdict, "INCONCLUSIVE")
+            self.assertEqual(run_res.exit_code, 3)
+            self.assertEqual(
+                run_res.run_data["escalation"]["reason"],
+                "harness_requirements_missing",
+            )
+
+    def test_invalid_utf8_mcp_config_treated_as_missing_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(base, target_required_mcp=["playwright"])
+            bad_json = base / "bad-utf8.mcp.json"
+            bad_json.write_bytes(b"\xff\xfe\x00invalid-utf8")
+
+            with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(bad_json)}):
+                code, items = run_doctor(repo, skip_network=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(
+                    {i.id: i for i in items}["required_mcp"].status, "error"
+                )
+
+                res = run_flow(repo, "verify", force=True)
+                self.assertEqual(res.verdict, "INCONCLUSIVE")
+                self.assertEqual(res.exit_code, 3)
+                self.assertEqual(
+                    res.run_data["escalation"]["reason"],
+                    "harness_requirements_missing",
+                )
+
+    def test_mcp_server_config_requires_object_with_non_empty_command_or_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(base, target_required_mcp=["null_srv"])
+            cfg_path = base / "mcp.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "null_srv": None,
+                            "empty_obj": {},
+                            "blank_cmd": {"command": "   "},
+                            "blank_url": {"url": ""},
+                            "non_str_cmd": {"command": ["npx"]},
+                            "valid_cmd": {"command": "npx", "args": ["-y", "pw"]},
+                            "valid_url": {"url": "https://example.com/mcp"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(cfg_path)}):
+                found = discover_configured_mcp_servers(repo)
+                self.assertEqual(set(found.keys()), {"valid_cmd", "valid_url"})
+
+                code, items = run_doctor(repo, skip_network=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(
+                    {i.id: i for i in items}["required_mcp"].status, "error"
+                )
+
+    def test_codex_user_scope_skills_dir_discovered_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake_home = base / "home"
+            fake_home.mkdir()
+            _write_skill(fake_home / ".agents" / "skills", "user-codex-skill")
+            repo = _make_garden_repo(
+                base / "proj", target_required_skills=["user-codex-skill"]
+            )
+
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+            with patch.dict(os.environ, clean_env, clear=True):
+                found = discover_installed_skills(repo)
+                self.assertIn("user-codex-skill", found)
+
+                code, items = run_doctor(repo, skip_network=True)
+                self.assertEqual(code, 0, [i.to_dict() for i in items])
+                self.assertEqual(
+                    {i.id: i for i in items}["required_skills"].status, "ok"
+                )
+
+    def test_adapter_scoped_mcp_discovery_and_project_disable_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake_home = base / "home"
+            fake_home.mkdir()
+            for core in (
+                "poteto-mode",
+                "correct",
+                "create-verification-skill",
+                "maintain-verification-skill",
+            ):
+                _write_skill(fake_home / ".agents" / "skills", core)
+
+            repo = _make_garden_repo(
+                base / "proj",
+                target_required_mcp=["playwright"],
+                with_real_agent=True,  # uses codex adapter
+            )
+            # Register playwright ONLY in Cursor config (not Codex)
+            (repo / ".cursor").mkdir(exist_ok=True)
+            (repo / ".cursor" / "mcp.json").write_text(
+                json.dumps({"mcpServers": {"playwright": {"command": "npx"}}}),
+                encoding="utf-8",
+            )
+            commit_all(repo, "add cursor mcp only")
+
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+
+            with patch.dict(os.environ, clean_env, clear=True):
+                code_cursor_only, items_cursor_only = run_doctor(
+                    repo, skip_network=True
+                )
+                self.assertEqual(code_cursor_only, 1)
+                self.assertEqual(
+                    {i.id: i for i in items_cursor_only}["required_mcp"].status, "error"
+                )
+                run_cursor_only = run_flow(repo, "verify", force=True)
+                self.assertEqual(run_cursor_only.verdict, "INCONCLUSIVE")
+                self.assertEqual(run_cursor_only.exit_code, 3)
+
+                # Register playwright in project .codex/config.toml -> Codex passes
+                (repo / ".codex").mkdir(exist_ok=True)
+                (repo / ".codex" / "config.toml").write_text(
+                    '[mcp_servers.playwright]\ncommand = "npx"\n',
+                    encoding="utf-8",
+                )
+                commit_all(repo, "add project codex mcp")
+
+                code_codex_ok, items_codex_ok = run_doctor(repo, skip_network=True)
+                self.assertEqual(code_codex_ok, 0, [i.to_dict() for i in items_codex_ok])
+                self.assertEqual(
+                    {i.id: i for i in items_codex_ok}["required_mcp"].status, "ok"
+                )
+                run_codex_ok = run_flow(repo, "verify", force=True)
+                self.assertEqual(run_codex_ok.verdict, "SATISFIED")
+                self.assertEqual(run_codex_ok.exit_code, 0)
+
+                # Enable in user ~/.codex/config.toml, but disable in project .codex/config.toml -> blocked
+                (fake_home / ".codex").mkdir(exist_ok=True)
+                (fake_home / ".codex" / "config.toml").write_text(
+                    '[mcp_servers.playwright]\ncommand = "npx"\n',
+                    encoding="utf-8",
+                )
+                (repo / ".codex" / "config.toml").write_text(
+                    "[mcp_servers.playwright]\nenabled = false\n",
+                    encoding="utf-8",
+                )
+                commit_all(repo, "disable playwright in project codex config")
+
+                code_disabled, items_disabled = run_doctor(repo, skip_network=True)
+                self.assertEqual(code_disabled, 1)
+                self.assertEqual(
+                    {i.id: i for i in items_disabled}["required_mcp"].status, "error"
+                )
+                run_disabled = run_flow(repo, "verify", force=True)
+                self.assertEqual(run_disabled.verdict, "INCONCLUSIVE")
+                self.assertEqual(run_disabled.exit_code, 3)
+
+    def test_preflight_checks_execution_worktree_not_dirty_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake_home = base / "home"
+            fake_home.mkdir()
+            repo = _make_garden_repo(
+                base / "proj", target_required_skills=["repo-skill"]
+            )
+            skill_md = _write_skill(repo / ".agents" / "skills", "repo-skill")
+            commit_all(repo, "commit repo-skill")
+
+            # Remove from local working tree only; HEAD still has it
+            skill_md.unlink()
+
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+
+            with patch.dict(os.environ, clean_env, clear=True):
+                res_in_head = run_flow(repo, "verify", force=True)
+                self.assertEqual(res_in_head.verdict, "SATISFIED")
+                self.assertEqual(res_in_head.exit_code, 0)
+
+                # Commit removal from HEAD, then recreate untracked only in working tree -> blocked
+                commit_all(repo, "remove repo-skill from HEAD")
+                _write_skill(repo / ".agents" / "skills", "repo-skill")
+
+                res_only_dirty = run_flow(repo, "verify", force=True)
+                self.assertEqual(res_only_dirty.verdict, "INCONCLUSIVE")
+                self.assertEqual(res_only_dirty.exit_code, 3)
+                self.assertEqual(
+                    res_only_dirty.run_data["escalation"]["reason"],
+                    "harness_requirements_missing",
+                )
+                # Verify temporary worktree was cleaned up after INCONCLUSIVE return
+                wt_root = repo / ".garden" / "worktrees"
+                remaining = list(wt_root.iterdir()) if wt_root.exists() else []
+                self.assertEqual(remaining, [])

@@ -893,7 +893,7 @@ search_paths = [
 | 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_skills` | 対象リポジトリに置く製品固有の必須スキル（pstack の外） |
 | 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_mcp` | そのガーデンの実行に必須の MCP サーバー |
 
-そのガーデンの実効的な必須スキルは `core ∪ [common_harness].required_skills ∪ [target_harness].required_skills` とします。`garden doctor` はこれらと `required_mcp` のいずれかが未導入・未接続なら `error`、実行前検査（Preflight）では `INCONCLUSIVE` として、不足しているものと導入手順を報告します。
+そのガーデンの実効的な必須スキルは `core ∪ [common_harness].required_skills ∪ [target_harness].required_skills` とします。`garden doctor` はこれらと `required_mcp` のいずれかが未導入・未設定・無効化なら `error`、実行前検査（Preflight）では `INCONCLUSIVE` として、不足しているものと導入手順を報告します（MCP の実接続確認は将来拡張）。
 
 ### 7.3 導入・更新 CLI の振る舞い（`init` / `doctor` / `upgrade`）
 
@@ -901,8 +901,8 @@ search_paths = [
   1. 対象リポジトリの `README.md`、ビルド定義、既存テスト・CI をスキャンし、適合するテンプレート型と根拠を提示する（判別不能時は終了コード `2` でエラーを返し、`--type` の明示を求める）。
   2. `.garden/garden.toml`、`.garden/.gitignore`、`docs/specs/<initial>.md`（`status: draft`）、`.github/workflows/garden.yml` を生成する（既存ファイルは `--force` なしでは上書きしない）。`--nursery-ref` で再利用ワークフローの参照版（実在するブランチ・タグ・SHA）を固定できる。
   3. 初期状態では `delegation.mode = "observe_only"` かつ仕様 `status = "draft"` として安全側に倒す。
-- **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--json]`**:
-  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、および §7.2 の実効的な必須スキルと `required_mcp` の導入・接続確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
+- **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--strict-harness] [--json]`**:
+  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、および §7.2 の実効的な必須スキルと `required_mcp` の導入・設定確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
   - 各項目を `ok` / `warn` / `error` の構造化 JSON および人間向け表で出力。
 - **`garden upgrade [--target <path>] [--to <version>] [--apply]`**:
   1. 現在の `[template].version`（`vN`）と候補版（`vM`）の `template.toml` 差分を計算し、ガーデンの独自カスタマイズ（運用担当者が追加したチェック、変更済みコマンド、独自委譲設定）を識別する。

@@ -13,7 +13,7 @@ from garden.resources import nursery_root as _resolve_nursery_root
 from garden.definition import GARDEN_DEF_REL_PATH, DefinitionError, load_definition
 from garden.git_utils import GitError, list_remotes, repo_root
 from garden.harness import (
-    definition_uses_real_agent,
+    definition_real_adapters,
     evaluate_harness_requirements,
     load_pstack_manifest,
 )
@@ -245,21 +245,42 @@ def run_doctor(
         )
 
     # 5b. Required skills & MCP servers verification (MVP-6)
-    enforce_core = strict_harness or definition_uses_real_agent(definition)
+    real_adapters = definition_real_adapters(definition)
+    enforce_core = strict_harness or bool(real_adapters)
     harness_eval = evaluate_harness_requirements(
         root,
         definition,
         nursery_root=nursery_root,
         enforce_core=enforce_core,
         include_advisory_core=True,
+        adapters=real_adapters,
     )
-    if harness_eval.missing_skills:
-        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
+    hint_suffix = (
+        f" ({'; '.join(harness_eval.remedy_hints)})"
+        if harness_eval.remedy_hints
+        else ""
+    )
+    if (harness_eval.core_enforced and harness_eval.manifest_error) or harness_eval.missing_skills:
+        skill_problems: list[str] = []
+        if harness_eval.core_enforced and harness_eval.manifest_error:
+            skill_problems.append(harness_eval.manifest_error)
+        if harness_eval.missing_skills:
+            skill_problems.append(
+                f"missing required skill(s): {', '.join(harness_eval.missing_skills)}"
+            )
         items.append(
             DiagnosticItem(
                 id="required_skills",
                 status="error",
-                detail=f"missing required skill(s): {', '.join(harness_eval.missing_skills)}{hint_suffix}",
+                detail=f"{'; '.join(skill_problems)}{hint_suffix}",
+            )
+        )
+    elif harness_eval.manifest_error:
+        items.append(
+            DiagnosticItem(
+                id="required_skills",
+                status="warn",
+                detail=f"{harness_eval.manifest_error} (advisory in observe_only mode)",
             )
         )
     elif harness_eval.required_skills:
@@ -271,7 +292,6 @@ def run_doctor(
             )
         )
     elif harness_eval.missing_core_skills:
-        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
         items.append(
             DiagnosticItem(
                 id="required_skills",
@@ -297,7 +317,6 @@ def run_doctor(
         )
 
     if harness_eval.missing_mcp:
-        hint_suffix = f" ({'; '.join(harness_eval.remedy_hints)})" if harness_eval.remedy_hints else ""
         items.append(
             DiagnosticItem(
                 id="required_mcp",

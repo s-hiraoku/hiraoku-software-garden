@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | **① 仕事の発見・受付** | Issue、ラベル、PR、スケジュール、CI 失敗など多様なイベントを受け、重複と対象を照合してフローを起動する | `[[triggers]]` の `auto` 解決、`garden-reusable.yml`（PR・PR 上の `/garden resume`・`workflow_dispatch`）、ローカルと HTML マーカーの冪等スキップを実装済み | 実運用は PR と手動実行が中心。`/garden resume` は PR 専用（非 PR の Issue は不可、権限者限定）であり、Issue 起票・`garden:ready` ラベル・CI 失敗起点の自動ワークフローは未実証 |
 | **② 仕様化** | 人が承認した仕様の原本と委譲範囲を基準に、改定時は影響差分を解析して仕事を組み替える | `docs/specs/*.md` のフロントマターと `AC-*` / `INV-*` 抽出、保護ブランチ基準の Trust Anchor 照合、`garden spec-diff` を実装済み | `spec-diff` は CLI として実装済みだが、仕様改定 PR 時の自動影響再検証ワークフローへの組み込みは MVP-7 で扱う |
-| **③ 実行管理** | 必須スキルと必須 MCP を含むハーネス環境を検証したうえで、着手順・分割・対象の版・権限を管理して隔離環境で実行する | 宣言的ステートマシン、`git worktree` 隔離と `verified_commit` 永続化、委譲厳格化バリデーターを実装済み | 必須スキルと必須 MCP の宣言・厳格検証は未定義（MVP-6）。仕事の自動分割と優先順位付けは未実装で、単一リポジトリ・単一フロー単位に割り切っている |
+| **③ 実行管理** | 必須スキルと必須 MCP を含むハーネス環境を検証したうえで、着手順・分割・対象の版・権限を管理して隔離環境で実行する | 宣言的ステートマシン、`git worktree` 隔離と `verified_commit` 永続化、委譲厳格化バリデーター、必須スキル・必須 MCP の設定確認と Preflight `INCONCLUSIVE` 停止を実装済み | MCP の実接続確認、pstack 自動導入・テンプレート別標準パターンは MVP-6 後半。仕事の自動分割と優先順位付けは未実装で、単一リポジトリ・単一フロー単位に割り切っている |
 | **④ 調査・実装・修正** | 許可範囲内で再現、調査、実装、修正を行い、仕様判断が必要なら人へ問いを返す | `codex` / `claude` / `antigravity` / `custom` / `mock` の各アダプターと事後ガード（`guard.py`）を実装済み | 結合テストとモック検証は完了済みだが、実対象リポジトリでの実エージェントによる `fix_and_retry` 本番運用は MVP-7 で扱う |
 | **⑤ 検証** | 必須チェック、実挙動シナリオ、形式検証を同じ版で実行し、2 層判定と構造化証拠を残す | `check` / `formal_check` の 2 層判定、`required_evidence` / `formal.json` 検証、ナーサリー自身の有界全状態探索を実装済み | 対象リポジトリ側の形式検証適用は MVP-8 で扱う。複数リポジトリをまたぐ結合シナリオも未対応 |
 | **⑥ 反映・再修正・人への引き渡し** | 委譲範囲内の自動反映、再修正、証拠付きの結実通知、例外のエスカレーションを自律的に振り分ける | `garden report`（要約、HTML マーカー、ラベル自動作成、Artifacts URL）と `garden reflect`（祖先および差分検証付き PR 作成・自動マージゲート）を実装済み | 実対象リポジトリは安全な `observe_only` で運用中。`propose_pr` / `auto_merge` 実運用は MVP-7、結実後のリリース・デプロイ連携は MVP-8 で扱う |
@@ -36,7 +36,7 @@
 Python 3.11 以上・標準ライブラリのみで動作する。モジュール構成の詳細は [詳細設計書 §1.2](../design/detailed-design.md#12-ナーサリーのディレクトリ構成)、全サブコマンド仕様は [詳細設計書 §8](../design/detailed-design.md#8-cli-リファレンスgarden-サブコマンド一覧) を参照する。
 
 - **テンプレート（4 型 × v1）**: `templates/{cli,web-frontend,http-api,library}/v1/`（各型に `template.toml`、`garden.toml.tmpl`、`spec.md.tmpl`、`workflow.yml.tmpl`、`release-evidence.json` を同梱）
-- **共通の開発ハーネスマニフェスト**: `harnesses/pstack.toml`（`pinned_ref` 管理と `doctor` の探索パス定義のみ。個別スキル・MCP の必須検査は未実装）
+- **共通の開発ハーネスマニフェスト**: `harnesses/pstack.toml`（`pinned_ref` 管理、`[skills].core` の必須検証、および `doctor` / Preflight の探索パス定義）
 - **GitHub Actions ワークフロー（4 本）**:
   - `.github/workflows/garden-reusable.yml`（対象リポジトリから呼ぶ汎用検証・報告ワークフロー）
   - `.github/workflows/garden-feedback-reusable.yml`（`/garden feedback` コメントからの介入記録ワークフロー）
