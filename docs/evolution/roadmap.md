@@ -64,7 +64,7 @@ flowchart LR
   - `harnesses/pstack.toml` と全 4 型のテンプレート（`templates/{cli,web-frontend,http-api,library}/v1/`）。
   - `garden init`、`garden upgrade`（独自設定を保ち新規チェックを `proposed` として提案）、`garden template-gate`（公開ゲート）、`uvx` / `pipx run` によるインストール不要の実行。
   - `garden report`（HTML マーカーによる重複スキップ、ラベル遷移）、`garden reflect`（工程⑥反映ゲート）、`garden status`（複数ガーデンの横断表示）、`/garden feedback` コメント解析、`garden metrics`。
-  - 再利用可能ワークフロー（`garden-reusable.yml`）、ナーサリー自己ドッグフーディング、有界全状態形式検証（`python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で 8 不変条件・61,842 状態を検証）。
+  - 再利用可能ワークフロー（`garden-reusable.yml`）、ナーサリー自己ドッグフーディング、有界全状態形式検証（`python3 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py` で 8 不変条件・48,720 状態を検証）。
 
 ### MVP-4: 1号目の実対象リポジトリ接続と完了判定 3 条件（完了）
 1 号目の実対象リポジトリとして HAB（`s-hiraoku/hiraoku-agent-base`）へ `templates/cli/v1` を導入し、カタログへ登録したうえで、最初の到達点となる次の 3 条件を実証した。

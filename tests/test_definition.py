@@ -177,3 +177,24 @@ run_on_demand = true
         bad = BASE_TOML.replace('invariants = ["INV-001"]', "")
         with self.assertRaisesRegex(DefinitionError, "invariants"):
             load_definition_bytes(bad.encode("utf-8"))
+
+    def test_rejects_empty_allowed_paths_in_write_modes_default_and_flow_override(self):
+        for mode in ("propose_pr", "auto_merge"):
+            bad_default = BASE_TOML.replace('mode = "propose_pr"', f'mode = "{mode}"', 1).replace(
+                'allowed_paths = ["src/**", "tests/**"]', "allowed_paths = []", 1
+            )
+            with self.assertRaisesRegex(DefinitionError, "must be non-empty"):
+                load_definition_bytes(bad_default.encode("utf-8"))
+
+            bad_flow = BASE_TOML.replace('mode = "propose_pr"', f'mode = "{mode}"', 1) + f"""
+[flows.empty_override]
+[flows.empty_override.delegation]
+mode = "{mode}"
+allowed_paths = []
+[[flows.empty_override.steps]]
+id = "s1"
+type = "check"
+check = "unit"
+"""
+            with self.assertRaisesRegex(DefinitionError, "must be non-empty"):
+                load_definition_bytes(bad_flow.encode("utf-8"))

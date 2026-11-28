@@ -513,6 +513,8 @@ def check_delegation_monotonicity() -> dict[str, Any]:
     ):
         if base_mode == "observe_only" and base_allowed:
             continue
+        if base_mode != "observe_only" and not base_allowed:
+            continue
         states_checked += 1
         base = DelegationConfig(
             mode=base_mode,
@@ -535,6 +537,7 @@ def check_delegation_monotonicity() -> dict[str, Any]:
         should_reject = (
             MODE_RANK[flow_mode] > MODE_RANK[base_mode]
             or (flow_mode == "observe_only" and bool(flow_allowed))
+            or (flow_mode != "observe_only" and not flow_allowed)
             or (not set(flow_allowed).issubset(set(base_allowed)))
             or flow_ret > base_ret
             or flow_cost > base_cost
@@ -747,7 +750,7 @@ def main() -> int:
             "invariants": ["INV-001", "INV-002"],
             "assumptions": [
                 "bounded engine transition space (max_retries<=2, 2 checks)",
-                "bounded delegation override space (45,927 combinations)",
+                f"bounded delegation override space ({deleg_res['states_checked']:,} combinations)",
                 f"bounded glob path matrix ({extra_res['guard_states_checked']} cases) and reflect gate matrix ({extra_res['reflect_states_checked']} cases)",
             ],
             "scope": f"bounded exhaustive real-code verification ({total_states} states)",

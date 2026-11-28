@@ -1830,3 +1830,57 @@ agent = "custom_a"
                 (backups[0] / "poteto-mode" / "SKILL.md").read_text(encoding="utf-8"),
                 "original-v0",
             )
+
+    def test_gemini_adapter_skill_and_mcp_profile_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake_home = base / "home"
+            fake_home.mkdir()
+            repo = _make_garden_repo(
+                base / "gemini-proj",
+                target_required_mcp=["playwright"],
+                with_real_agent=True,
+            )
+            gpath = repo / ".garden" / "garden.toml"
+            gpath.write_text(
+                gpath.read_text(encoding="utf-8").replace(
+                    'adapter = "codex"', 'adapter = "gemini"'
+                ),
+                encoding="utf-8",
+            )
+            commit_all(repo, "use gemini adapter")
+
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("GARDEN_SKILL_PATHS", "GARDEN_MCP_CONFIG_PATHS")
+            }
+            clean_env["HOME"] = str(fake_home)
+            with patch.dict(os.environ, clean_env, clear=True):
+                # Missing both skills and MCP
+                code_bad, items_bad = run_doctor(repo, skip_network=True)
+                self.assertEqual(code_bad, 1)
+                by_id = {i.id: i for i in items_bad}
+                self.assertEqual(by_id["required_skills"].status, "error")
+                self.assertEqual(by_id["required_mcp"].status, "error")
+
+                # Populate ~/.gemini/skills and ~/.gemini/settings.json
+                for core in (
+                    "poteto-mode",
+                    "correct",
+                    "create-verification-skill",
+                    "maintain-verification-skill",
+                ):
+                    _write_skill(fake_home / ".gemini" / "skills", core)
+                (fake_home / ".gemini" / "settings.json").write_text(
+                    json.dumps({"mcpServers": {"playwright": {"command": "npx"}}}),
+                    encoding="utf-8",
+                )
+                code_ok, items_ok = run_doctor(repo, skip_network=True)
+                self.assertEqual(code_ok, 0, [i.to_dict() for i in items_ok])
+                guide = build_harness_guide(repo, adapter="gemini")
+                self.assertTrue(guide["status"]["ok"])
+                self.assertEqual(
+                    guide["environments"]["gemini"]["repo_skill_dir"],
+                    ".gemini/skills",
+                )

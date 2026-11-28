@@ -28,6 +28,7 @@ from garden.harness_setup import (
     format_harness_guide_markdown,
     sync_pstack,
 )
+from garden.issues import load_issue_context_file
 from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
 from garden.release_gate import run_template_release_gate
@@ -192,6 +193,17 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--trigger-action", default=None)
     run_cmd.add_argument("--trigger-label", default=None)
     run_cmd.add_argument("--issue", type=int, default=None)
+    run_cmd.add_argument(
+        "--fetch-issue",
+        action="store_true",
+        help="fetch GitHub Issue title/body/comments for --issue and pass as task context to agent steps",
+    )
+    run_cmd.add_argument(
+        "--issue-file",
+        type=Path,
+        default=None,
+        help="load pre-fetched Issue JSON context from file (offline/test alternative to --fetch-issue)",
+    )
     run_cmd.add_argument("--check-github-markers", action="store_true")
     run_cmd.add_argument("--existing-comments-file", type=Path, default=None)
     run_cmd.add_argument("--force", action="store_true")
@@ -448,6 +460,13 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, ValueError) as error:
                 print(f"error: {error}", file=sys.stderr)
                 return 2
+        issue_context = None
+        if args.issue_file is not None:
+            try:
+                issue_context = load_issue_context_file(args.issue_file)
+            except (OSError, ValueError) as error:
+                print(f"error: {error}", file=sys.stderr)
+                return 2
         try:
             result = run_flow(
                 args.target,
@@ -464,10 +483,15 @@ def main(argv: list[str] | None = None) -> int:
                 include_proposed=args.include_proposed,
                 existing_comments=existing_comments,
                 check_github_markers=args.check_github_markers,
+                issue_context=issue_context,
+                fetch_issue=args.fetch_issue,
             )
         except (DefinitionError, GitError, ValueError, OSError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
 
         payload = {
             "run_id": result.run_id,

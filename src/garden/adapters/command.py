@@ -16,7 +16,7 @@ from garden.adapters.providers import (
 from garden.definition import AgentConfig
 
 
-PROVIDER_ADAPTERS = ("codex", "claude", "antigravity")
+PROVIDER_ADAPTERS = ("codex", "claude", "gemini", "antigravity")
 
 
 def run_command_adapter(

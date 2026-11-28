@@ -41,8 +41,10 @@ garden harness sync-pstack --adapter antigravity --apply   # ~/.gemini/config/pl
 garden harness sync-pstack --adapter cursor --apply        # ~/.cursor/plugins/pstack（プラグイン構成）
 garden harness sync-pstack --adapter codex --apply         # ~/.agents/skills（スキル展開・既存スキル保持）
 garden harness sync-pstack --adapter claude --apply        # ~/.claude/skills（スキル展開・既存スキル保持）
+garden harness sync-pstack --adapter gemini --apply        # ~/.gemini/skills（スキル展開・既存スキル保持）
 garden harness sync-pstack --adapter repo --target . --apply         # <repo>/.agents/skills（Codex / Antigravity 向け同梱）
 garden harness sync-pstack --adapter claude-repo --target . --apply  # <repo>/.claude/skills（Claude Code 向け同梱）
+garden harness sync-pstack --adapter gemini-repo --target . --apply  # <repo>/.gemini/skills（Gemini CLI 向け同梱）
 ```
 
 `sync-pstack --apply` は取得したコミットが `pinned_ref` と完全一致すること、および `[skills].core` の全スキルに `SKILL.md` があることを確認してから、全同期先を事前検査・ステージングしたうえで一括置換します。配置先や対象スキルがシンボリックリンクの場合は参照先を破壊しないよう拒否し、管理外の既存同名スキルは `--force` なしでは上書きしません（中断や復元失敗時は旧バックアップを削除せず保護します）。`--approval-branch main` と `--flow <flow>` を付けると、承認済み `[common_harness].ref` の照合と実行フローのアダプター限定同期を行います。なお、相対パスの `--dest` は呼び出し元のカレントディレクトリ基準で解決します。
@@ -56,6 +58,7 @@ garden harness sync-pstack --adapter claude-repo --target . --apply  # <repo>/.c
 | **Antigravity** | `~/.gemini/config/plugins/pstack`, `~/.gemini/config/skills`, `.agents/skills` | `~/.gemini/antigravity/mcp` → `~/.gemini/config/mcp_config.json` → `~/.gemini/antigravity/mcp_config.json` → `.mcp.json` |
 | **Cursor** | `~/.cursor/plugins/pstack`, `~/.cursor/skills`, `.cursor/skills`, `.agents/skills` | `~/.cursor/mcp.json` → `.cursor/mcp.json` |
 | **Claude Code** | `~/.claude/skills`, `.claude/skills`, `.agents/skills` | `~/.claude.json`（全体） → `.mcp.json` → `~/.claude.json`（対象プロジェクトの `mcpServers` / `disabledMcpjsonServers`） |
+| **Gemini CLI** | `~/.gemini/skills`, `~/.agents/skills`, `.gemini/skills`, `.agents/skills` | `~/.gemini/settings.json` → `.gemini/settings.json` |
 | **Codex** | `~/.agents/skills`, `.agents/skills` | `~/.codex/config.toml` → `.codex/config.toml` |
 
 ### MCP サーバー設定の判定ルール

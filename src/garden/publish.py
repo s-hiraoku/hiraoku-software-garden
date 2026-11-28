@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+import re
 import subprocess
+import tempfile
 from typing import Any
 
 from garden.report import load_run_data
@@ -349,12 +351,24 @@ def reflect_run(
                 f"cannot execute reflect: no git repository found for {run_dir}"
             )
 
+    issue_info = run_data.get("issue") if isinstance(run_data.get("issue"), dict) else None
+    issue_num_raw = issue_info.get("number") if issue_info else None
+    issue_number = (
+        int(issue_num_raw)
+        if isinstance(issue_num_raw, int) and not isinstance(issue_num_raw, bool) and issue_num_raw > 0
+        else None
+    )
+    issue_title = (
+        " ".join(str(issue_info.get("title") or "").split()) if issue_info else ""
+    )
+
     result: dict[str, Any] = decision.to_dict() | {
         "base_branch": base_branch,
         "git_verified": git_verified,
         "dry_run": not execute,
         "executed": False,
         "pr_url": None,
+        "issue_number": issue_number,
         "auto_merge_enabled": False,
     }
     if not execute or decision.allowed_action in ("blocked", "none"):
@@ -362,14 +376,21 @@ def reflect_run(
 
     assert decision.worktree_branch is not None
     assert git_root is not None
-    title = f"[Garden] {run_data.get('flow', 'run')}: {decision.run_id}"
+    if issue_number is not None and issue_title:
+        title = f"[Garden] #{issue_number}: {issue_title}"[:120]
+    elif issue_title:
+        title = f"[Garden] {issue_title}"[:120]
+    else:
+        title = f"[Garden] {run_data.get('flow', 'run')}: {decision.run_id}"
     summary_file = run_dir / "summary.md"
-    body_args = (
-        ["--body-file", str(summary_file)]
+    base_body = (
+        summary_file.read_text(encoding="utf-8")
         if summary_file.is_file()
-        else ["--body", f"Automated Garden run `{decision.run_id}` (`{decision.verdict}`)."]
+        else f"Automated Garden run `{decision.run_id}` (`{decision.verdict}`)."
     )
-
+    if issue_number is not None:
+        if not re.search(rf"(?i)\bcloses\s+#{issue_number}\b", base_body):
+            base_body = f"Closes #{issue_number}\n\n{base_body}"
     push_proc = subprocess.run(
         ["git", "push", "-u", "origin", decision.worktree_branch],
         cwd=git_root,
@@ -382,24 +403,28 @@ def reflect_run(
             f"git push failed: {push_proc.stderr.strip() or push_proc.stdout.strip()}"
         )
 
-    pr_proc = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--base",
-            base_branch,
-            "--head",
-            decision.worktree_branch,
-            "--title",
-            title,
-            *body_args,
-        ],
-        cwd=git_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        pr_body_path = Path(tmp_dir) / "pr-body.md"
+        pr_body_path.write_text(base_body, encoding="utf-8")
+        pr_proc = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                base_branch,
+                "--head",
+                decision.worktree_branch,
+                "--title",
+                title,
+                "--body-file",
+                str(pr_body_path),
+            ],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     if pr_proc.returncode != 0:
         raise RuntimeError(
             f"gh pr create failed: {pr_proc.stderr.strip() or pr_proc.stdout.strip()}"

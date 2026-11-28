@@ -25,7 +25,7 @@ MODE_RANK = {
 CHECK_KINDS = ("check", "formal_check")
 CHECK_STATUSES = ("active", "proposed")
 FORMAL_TOOLS = ("tlc", "quint", "lean4", "python-exhaustive")
-AGENT_ADAPTERS = ("codex", "claude", "antigravity", "custom", "mock")
+AGENT_ADAPTERS = ("codex", "claude", "gemini", "antigravity", "custom", "mock")
 FLOW_SCOPES = ("flow_checks", "all_specs")
 STEP_TYPES = ("check", "agent", "gate", "report")
 ON_FAIL_ACTIONS = ("abort", "escalate", "retry", "fix_and_retry")
@@ -245,6 +245,10 @@ def _parse_delegation(
     allowed_paths = _dedupe_preserve(_validate_str_list(allowed_raw, f"{ctx}.allowed_paths"))
     if mode == "observe_only" and allowed_paths:
         raise DefinitionError(f"{ctx}.allowed_paths: must be empty when mode is 'observe_only'")
+    if mode != "observe_only" and not allowed_paths:
+        raise DefinitionError(
+            f"{ctx}.allowed_paths: must be non-empty when mode is '{mode}'"
+        )
 
     forbidden_raw = table.get("forbidden_paths", [])
     forbidden_list = _validate_str_list(forbidden_raw, f"{ctx}.forbidden_paths")
@@ -297,6 +301,10 @@ def _merge_strict_delegation(
             raise DefinitionError(
                 f"{ctx}.allowed_paths: must be empty when mode is 'observe_only'"
             )
+        if mode != "observe_only" and not allowed_paths:
+            raise DefinitionError(
+                f"{ctx}.allowed_paths: must be non-empty when mode is '{mode}'"
+            )
         base_allowed = set(base.allowed_paths)
         extra = [p for p in allowed_paths if p not in base_allowed]
         if extra:
@@ -305,6 +313,10 @@ def _merge_strict_delegation(
             )
     else:
         allowed_paths = () if mode == "observe_only" else base.allowed_paths
+        if mode != "observe_only" and not allowed_paths:
+            raise DefinitionError(
+                f"{ctx}.allowed_paths: must be non-empty when mode is '{mode}'"
+            )
 
     if "forbidden_paths" in override:
         extra_forbidden = _validate_str_list(

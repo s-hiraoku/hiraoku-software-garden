@@ -24,7 +24,9 @@ DEFAULT_EXTRA_SKILL_DIRS: tuple[str, ...] = (
     ".agents/skills",
     ".cursor/skills",
     ".claude/skills",
+    ".gemini/skills",
     "~/.agents/skills",
+    "~/.gemini/skills",
     "~/.gemini/config/skills",
     "~/.cursor/skills",
     "~/.claude/skills",
@@ -39,6 +41,12 @@ ADAPTER_SKILL_DIRS: dict[str, tuple[str, ...]] = {
     "claude": (
         ".claude/skills",
         "~/.claude/skills",
+    ),
+    "gemini": (
+        ".gemini/skills",
+        ".agents/skills",
+        "~/.gemini/skills",
+        "~/.agents/skills",
     ),
     "antigravity": (
         ".agents/skills",
@@ -56,6 +64,7 @@ ADAPTER_SKILL_DIRS: dict[str, tuple[str, ...]] = {
 ADAPTER_REPO_SKILL_DIR: dict[str, str] = {
     "codex": ".agents/skills",
     "claude": ".claude/skills",
+    "gemini": ".gemini/skills",
     "antigravity": ".agents/skills",
     "cursor": ".cursor/skills",
 }
@@ -74,6 +83,10 @@ ADAPTER_MCP_PROFILES: dict[str, tuple[tuple[str, str, bool], ...]] = {
         (".mcp.json", "json", False),
         ("~/.claude.json", "claude_json_project", True),
     ),
+    "gemini": (
+        ("~/.gemini/settings.json", "json", True),
+        (".gemini/settings.json", "json", False),
+    ),
     "antigravity": (
         ("~/.gemini/antigravity/mcp", "schema_dir", True),
         ("~/.gemini/config/mcp_config.json", "json", True),
@@ -89,6 +102,7 @@ ADAPTER_MCP_PROFILES: dict[str, tuple[tuple[str, str, bool], ...]] = {
 ADAPTER_MCP_HINTS: dict[str, str] = {
     "codex": ".codex/config.toml or ~/.codex/config.toml",
     "claude": ".mcp.json or ~/.claude.json",
+    "gemini": ".gemini/settings.json or ~/.gemini/settings.json",
     "antigravity": ".mcp.json, ~/.gemini/antigravity/mcp_config.json, or ~/.gemini/config/mcp_config.json",
     "cursor": ".cursor/mcp.json or ~/.cursor/mcp.json",
 }

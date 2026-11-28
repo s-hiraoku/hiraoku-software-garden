@@ -36,11 +36,13 @@ PSTACK_SYNC_ADAPTERS: dict[str, tuple[str, str]] = {
     "cursor": ("~/.cursor/plugins/pstack", "plugin"),
     "codex": ("~/.agents/skills", "skills_dir"),
     "claude": ("~/.claude/skills", "skills_dir"),
+    "gemini": ("~/.gemini/skills", "skills_dir"),
     "repo": (".agents/skills", "skills_dir"),
     "claude-repo": (".claude/skills", "skills_dir"),
+    "gemini-repo": (".gemini/skills", "skills_dir"),
 }
 
-GUIDE_ADAPTERS: tuple[str, ...] = ("antigravity", "cursor", "claude", "codex")
+GUIDE_ADAPTERS: tuple[str, ...] = ("antigravity", "cursor", "claude", "codex", "gemini")
 MANAGED_MARKER_FILENAME = ".garden-pstack-ref"
 
 KNOWN_MCP_SNIPPETS: dict[str, dict[str, Any]] = {

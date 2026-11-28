@@ -1,10 +1,14 @@
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from garden.publish import evaluate_reflect_gate
-from tests.helpers import git, run_cli
+from garden.issues import load_issue_context_file
+from garden.publish import evaluate_reflect_gate, reflect_run
+from tests.helpers import PSTACK_SHA, commit_all, git, init_target_repo, run_cli, sample_spec
 from tests.test_engine import _build_fixture_repo
 
 
@@ -195,3 +199,203 @@ class ReflectGateTests(unittest.TestCase):
             self.assertTrue(
                 any(r.startswith("unapproved_files_in_verified_commit:") for r in unapp_data["reasons"])
             )
+
+    def test_issue_driven_run_with_gemini_adapter_and_reflect_links_issue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_target_repo(base / "issue-app")
+            (repo / "src").mkdir()
+            (repo / "src" / "app.txt").write_text("OLD\n", encoding="utf-8")
+            (repo / "docs" / "specs").mkdir(parents=True)
+            (repo / "docs" / "specs" / "app.md").write_text(
+                sample_spec("approved"), encoding="utf-8"
+            )
+            (repo / ".garden").mkdir()
+            (repo / ".garden" / ".gitignore").write_text(
+                "runs/\nworktrees/\n", encoding="utf-8"
+            )
+
+            # Populate pstack core skills in .gemini/skills so real gemini preflight passes
+            for core in (
+                "poteto-mode",
+                "correct",
+                "create-verification-skill",
+                "maintain-verification-skill",
+            ):
+                sdir = repo / ".gemini" / "skills" / core
+                sdir.mkdir(parents=True, exist_ok=True)
+                (sdir / "SKILL.md").write_text(f"# {core}\n", encoding="utf-8")
+
+            gemini_stub = base / "gemini_impl.py"
+            gemini_stub.write_text(
+                "import json, pathlib, sys\n"
+                "prompt = sys.stdin.read()\n"
+                "assert '## Task Issue (#77: Set app state to READY)' in prompt\n"
+                "assert 'Keep it minimal' in prompt\n"
+                "assert 'garden-report:' not in prompt\n"
+                "pathlib.Path('src/app.txt').write_text('READY\\n', encoding='utf-8')\n"
+                "inner = '```json\\n' + json.dumps({\n"
+                "  'schema_version': 1,\n"
+                "  'outcome': 'completed',\n"
+                "  'summary': 'implemented #77',\n"
+                "  'changed_files': ['src/app.txt'],\n"
+                "}) + '\\n```'\n"
+                "print(json.dumps({'response': inner, 'stats': {'models': {'gemini-2.5-pro': {'tokens': {'prompt': 100, 'candidates': 40}}}}}))\n",
+                encoding="utf-8",
+            )
+            (repo / ".garden" / "garden.toml").write_text(
+                f"""
+schema_version = 1
+[template]
+name = "cli"
+version = 1
+[common_harness]
+name = "pstack"
+ref = "{PSTACK_SHA}"
+[target_harness]
+name = "issue-h"
+version = 1
+[spec]
+paths = ["docs/specs/app.md"]
+[delegation]
+mode = "propose_pr"
+allowed_paths = ["src/**"]
+max_retries = 1
+max_duration_sec = 120
+max_cost_usd = 2.0
+[checks.verify_ready]
+command = ["python3", "-c", "assert open('src/app.txt').read().strip() == 'READY'"]
+covers = ["AC-001", "AC-002", "INV-001"]
+[agents.gemini_coder]
+adapter = "gemini"
+command = [{json.dumps(sys.executable)}, {json.dumps(str(gemini_stub))}]
+timeout_sec = 30
+[flows.implement_issue]
+scope = "all_specs"
+[[flows.implement_issue.steps]]
+id = "impl"
+type = "agent"
+agent = "gemini_coder"
+purpose = "implement"
+[[flows.implement_issue.steps]]
+id = "verify"
+type = "check"
+check = "verify_ready"
+""",
+                encoding="utf-8",
+            )
+            commit_all(repo, "init issue-driven repo")
+
+            issue_file = base / "issue77.json"
+            issue_file.write_text(
+                json.dumps(
+                    {
+                        "number": 77,
+                        "title": "Set app state to READY",
+                        "body": "Update src/app.txt to READY.",
+                        "url": "https://github.com/example/issue-app/issues/77",
+                        "labels": [{"name": "garden:ready"}],
+                        "comments": [
+                            {"author": {"login": "bot"}, "body": "<!-- garden-report:{\"v\":1} --> noise"},
+                            {"author": {"login": "s-hiraoku"}, "body": "Keep it minimal."},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = load_issue_context_file(issue_file)
+            self.assertEqual(len(loaded["comments"]), 1)
+
+            run_proc = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue_file),
+                "--json",
+            )
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr + run_proc.stdout)
+            payload = json.loads(run_proc.stdout)
+            self.assertEqual(payload["verdict"], "SATISFIED")
+            self.assertEqual(payload["run"]["issue"]["number"], 77)
+            self.assertEqual(payload["run"]["issue"]["title"], "Set app state to READY")
+
+            # A different issue (#78) on the same HEAD must NOT duplicate-skip #77's run
+            issue78_file = base / "issue78.json"
+            issue78_file.write_text(
+                json.dumps(
+                    {
+                        "number": 78,
+                        "title": "Another issue",
+                        "body": "Different task",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # Run #78 fails stub assertion (proving it was NOT skipped as duplicate of #77)
+            run78 = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue78_file),
+                "--json",
+            )
+            self.assertFalse(json.loads(run78.stdout)["skipped_duplicate"])
+
+            # Combining --fetch-issue with --issue-file or non-positive --issue must exit 2
+            bad_combo = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue",
+                "77",
+                "--fetch-issue",
+                "--issue-file",
+                str(issue_file),
+            )
+            self.assertEqual(bad_combo.returncode, 2)
+            bad_num = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue",
+                "0",
+                "--fetch-issue",
+            )
+            self.assertEqual(bad_num.returncode, 2)
+
+            # Verify reflect --execute links PR title & body to Closes #77 even if summary mentions Closes #770
+            summary_path = Path(payload["run_dir"]) / "summary.md"
+            summary_path.write_text(
+                summary_path.read_text(encoding="utf-8") + "\nSee also Closes #770.\n",
+                encoding="utf-8",
+            )
+            captured_pr_cmd: list[str] = []
+            captured_pr_body: list[str] = []
+            real_run = subprocess.run
+
+            def _fake_run(argv, *args, **kwargs):
+                if argv[:2] == ["git", "push"]:
+                    return subprocess.CompletedProcess(argv, 0, "", "")
+                if argv[:3] == ["gh", "pr", "create"]:
+                    captured_pr_cmd.extend(argv)
+                    bf_idx = argv.index("--body-file") + 1
+                    captured_pr_body.append(Path(argv[bf_idx]).read_text(encoding="utf-8"))
+                    return subprocess.CompletedProcess(
+                        argv, 0, "https://github.com/example/issue-app/pull/101\n", ""
+                    )
+                return real_run(argv, *args, **kwargs)
+
+            with patch("garden.publish.subprocess.run", side_effect=_fake_run):
+                ref_res = reflect_run(Path(payload["run_dir"]), execute=True)
+
+            self.assertTrue(ref_res["executed"])
+            self.assertEqual(ref_res["issue_number"], 77)
+            self.assertEqual(ref_res["pr_url"], "https://github.com/example/issue-app/pull/101")
+            self.assertIn("[Garden] #77: Set app state to READY", captured_pr_cmd)
+            self.assertTrue(captured_pr_body and captured_pr_body[0].startswith("Closes #77\n\n"))
