@@ -91,7 +91,8 @@ hiraoku-software-garden/
 │       ├── definition.py           # ガーデン定義 (.garden/garden.toml) のパースと厳格検証
 │       ├── spec.py                 # 仕様書 (YAMLフロントマター・AC/INV) と承認SHA照合
 │       ├── spec_diff.py            # 承認済み仕様との条件単位差分と影響解析 (spec-diff)
-│       ├── doctor.py               # 環境・Git・仕様・pstack マニフェスト診断
+│       ├── doctor.py               # 環境・Git・仕様・pstack マニフェスト・必須スキル/MCP 診断
+│       ├── harness.py              # 必須スキル・必須 MCP サーバー探索および要件検証
 │       ├── engine.py               # 宣言的ステップのステートマシン実行と冪等・worktree管理
 │       ├── checks.py               # check / formal_check 実行と2層判定
 │       ├── guard.py                # forbidden_paths / allowed_paths / 権限・上限の事後検査
@@ -892,7 +893,7 @@ search_paths = [
 | 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_skills` | 対象リポジトリに置く製品固有の必須スキル（pstack の外） |
 | 対象リポジトリの `.garden/garden.toml` | `[target_harness].required_mcp` | そのガーデンの実行に必須の MCP サーバー |
 
-そのガーデンの実効的な必須スキルは `core ∪ [common_harness].required_skills ∪ [target_harness].required_skills` とします。`garden doctor` はこれらと `required_mcp` のいずれかが未導入・未接続なら `error`、実行前検査（Preflight）では `INCONCLUSIVE` として、不足しているものと導入手順を報告します。
+そのガーデンの実効的な必須スキルは `core ∪ [common_harness].required_skills ∪ [target_harness].required_skills` とします。`garden doctor` はこれらと `required_mcp` のいずれかが未導入・未設定・無効化なら `error`、実行前検査（Preflight）では `INCONCLUSIVE` として、不足しているものと導入手順を報告します（MCP の実接続確認は将来拡張）。
 
 ### 7.3 導入・更新 CLI の振る舞い（`init` / `doctor` / `upgrade`）
 
@@ -900,8 +901,8 @@ search_paths = [
   1. 対象リポジトリの `README.md`、ビルド定義、既存テスト・CI をスキャンし、適合するテンプレート型と根拠を提示する（判別不能時は終了コード `2` でエラーを返し、`--type` の明示を求める）。
   2. `.garden/garden.toml`、`.garden/.gitignore`、`docs/specs/<initial>.md`（`status: draft`）、`.github/workflows/garden.yml` を生成する（既存ファイルは `--force` なしでは上書きしない）。`--nursery-ref` で再利用ワークフローの参照版（実在するブランチ・タグ・SHA）を固定できる。
   3. 初期状態では `delegation.mode = "observe_only"` かつ仕様 `status = "draft"` として安全側に倒す。
-- **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--json]`**:
-  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、および §7.2 の実効的な必須スキルと `required_mcp` の導入・接続確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
+- **`garden doctor [--target <path>] [--approval-branch <branch>] [--skip-network] [--strict-harness] [--json]`**:
+  - 検査項目：①Git リポジトリ・リモート整合、②`.garden/garden.toml` スキーマ＆厳格化チェック、③`[spec].paths` の存在・ID 構文・`approval_branch` 照合、④`[checks]` 実行バイナリの存在確認、⑤`[common_harness]`（pstack）の検出と版確認、および §7.2 の実効的な必須スキルと `required_mcp` の導入・設定確認、⑥`.garden/.gitignore` の確認、⑦承認ブランチ（`approval_branch`、既定 `main`）のブランチ保護確認（リモート接続・権限がある場合に API 等で保護設定を確認し、未保護または確認不可なら `warn` を報告）。
   - 各項目を `ok` / `warn` / `error` の構造化 JSON および人間向け表で出力。
 - **`garden upgrade [--target <path>] [--to <version>] [--apply]`**:
   1. 現在の `[template].version`（`vN`）と候補版（`vM`）の `template.toml` 差分を計算し、ガーデンの独自カスタマイズ（運用担当者が追加したチェック、変更済みコマンド、独自委譲設定）を識別する。
@@ -920,7 +921,7 @@ search_paths = [
 | カタログ（既存互換） | `garden check <repo-id>...` | カタログ登録済みチェックを実行し JSON 出力 | `0` 全合格 / `1` failed・unavailable あり / `2` 引数・設定不正 |
 | カタログ | `garden register <target> [--id ID] [--remote URL] [--description DESC] [--check CMD...] [--force]` | 対象リポジトリをナーサリーのカタログ（`garden.toml`）へ登録 | `0` 成功 / `2` 入力・競合エラー |
 | 導入・保守 | `garden init [--target PATH] [--type TYPE] [--version N] [--nursery-ref REF] [--force]` | 対象リポジトリを診断しガーデン定義・仕様ひな型を生成 | `0` 成功 / `2` 入力・競合エラー |
-| 導入・保守 | `garden doctor [--target PATH] [--approval-branch BRANCH] [--skip-network] [--json]` | 環境・定義・承認仕様・pstack・チェック依存を診断 | `0` error なし / `1` error あり / `2` Git 異常・定義読込不可 |
+| 導入・保守 | `garden doctor [--target PATH] [--approval-branch BRANCH] [--skip-network] [--strict-harness] [--json]` | 環境・定義・承認仕様・pstack・必須スキル/MCP・チェック依存を診断 | `0` error なし / `1` error あり / `2` Git 異常・定義読込不可 |
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
 | 導入・保守 | `garden spec-diff [--target PATH] [--base REF] [--head REF]` | 承認済み仕様との条件単位差分（追加・削除・変更）と影響チェック・フローを解析 | `0` 整合 / `1` ガーデン更新要（未カバー追加・孤立チェック） / `2` 入力不正 |
 | 導入・保守 | `garden template-gate (--type TYPE \| --all) [--version N] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |

@@ -106,12 +106,12 @@ flowchart LR
   - 旧コミットの `auto` 実行中に、新コミットの PR 検証が待機し、その後に `/garden resume` が入るケースを再現する。新コミットの必須チェックが取り消されずに実行され、合格できることを確認する。
   - `garden status` でナーサリー自身と登録済み全ガーデンの状態が正確に集約される。
 
-### MVP-6: ハーネス標準化（必須スキル・必須 MCP の定義と検証）
+### MVP-6: ハーネス標準化（必須スキル・必須 MCP の定義と検証・進行中）
 - **目的**: 実エージェントに自律的な実装・修正を委譲する前提として、共通の開発ハーネスと対象固有のハーネスに必要なスキルおよび MCP サーバーを明示的に定義し、機械的に診断・準備できる基盤を整える。
 - **主な取り組み**
-  1. **必須スキル・必須 MCP の宣言スキーマ整備**: [詳細設計書 §7.2](../design/detailed-design.md#72-共通の開発ハーネスpstackマニフェストharnessespstacktoml) の分担に従い、`harnesses/pstack.toml` の `[skills].core` を全ガーデン共通の必須スキルとして扱い、`.garden/garden.toml` の `[common_harness].required_skills`・`[target_harness].required_skills`・`[target_harness].required_mcp`（接続確認方法・版固定方針を含む）を読み込んで検査できるようにする。
-  2. **`garden doctor` と Preflight の厳格化**: 必須スキルや必須 MCP が未導入または未接続の場合、単なる `warn` ではなく `doctor` では `error`、実行前検査では `INCONCLUSIVE` として検出し、不足物と導入手順を明示する。
-  3. **導入導線と再現性の整備**: 共通の開発ハーネス（pstack）や必須スキル・MCP 設定を、ローカル環境（Antigravity / Cursor / Claude Code / Codex）および CI 環境へ再現性高く導入できる補助コマンド・設定ガイド・プラグイン連携を整える。
+  1. **必須スキル・必須 MCP の宣言スキーマ整備（実装済み）**: [詳細設計書 §7.2](../design/detailed-design.md#72-共通の開発ハーネスpstackマニフェストharnessespstacktoml) の分担に従い、`harnesses/pstack.toml` の `[skills].core` を全ガーデン共通の必須スキルとして扱い、`.garden/garden.toml` の `[common_harness].required_skills`・`[target_harness].required_skills`・`[target_harness].required_mcp` を読み込んで検証できるようにする。
+  2. **`garden doctor` と Preflight の厳格化（設定確認は実装済み）**: 明示宣言された必須スキル・必須 MCP（および実エージェント利用時・`--strict-harness` 時の `[skills].core`）が未導入、未設定、または無効化の場合、`doctor` では `error`（終了コード `1`）、実行前検査では `INCONCLUSIVE`（終了コード `3`）として検出し、不足物と導入手順を明示する。なお、MCP サーバーの実接続・疎通確認は MVP-6 後半の残作業として扱う。
+  3. **導入導線・MCP 疎通確認・再現性の整備**: 共通の開発ハーネス（pstack）や必須スキル・MCP 設定を、ローカル環境（Antigravity / Cursor / Claude Code / Codex）および CI 環境へ再現性高く導入できる補助コマンド・設定ガイド・プラグイン連携を整えるとともに、必要に応じて必須 MCP サーバーの実接続確認を追加する。
   4. **テンプレート別のハーネス標準パターン策定**: `cli`、`web-frontend`（ブラウザ操作系 MCP / Playwright 等）、`http-api`、`library` の型ごとに、標準の必須スキル・MCP と対象固有のハーネス構成をテンプレートへ組み込む。
 - **完了条件**
   - `.garden/garden.toml` で `required_skills` と `required_mcp` を宣言でき、欠損環境では `garden doctor` が終了コード `1`、不足解消後は終了コード `0` を返すことを単体・結合テストで実証する。

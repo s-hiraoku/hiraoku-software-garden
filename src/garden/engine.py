@@ -36,6 +36,7 @@ from garden.git_utils import (
     repo_root,
 )
 from garden.guard import snapshot_untracked_files, verify_post_agent_guard
+from garden.harness import evaluate_harness_requirements, flow_real_adapters
 from garden.report import fetch_github_issue_comments, find_satisfied_marker
 from garden.spec import TrustAnchorResult, verify_trust_anchor
 
@@ -769,6 +770,42 @@ def run_flow(
         return response, True
 
     try:
+        # Preflight gate inside execution worktree: missing required skills / MCP -> INCONCLUSIVE
+        real_adapters = flow_real_adapters(definition, flow)
+        harness_eval = evaluate_harness_requirements(
+            worktree_path,
+            definition,
+            enforce_core=bool(real_adapters),
+            adapters=real_adapters,
+        )
+        if harness_eval.has_blocking_missing:
+            missing_parts: list[str] = []
+            if harness_eval.core_enforced and harness_eval.manifest_error:
+                missing_parts.append(harness_eval.manifest_error)
+            if harness_eval.missing_skills:
+                missing_parts.append(
+                    f"missing required skill(s): {', '.join(harness_eval.missing_skills)}"
+                )
+            if harness_eval.missing_mcp:
+                missing_parts.append(
+                    f"missing required MCP server(s): {', '.join(harness_eval.missing_mcp)}"
+                )
+            if harness_eval.remedy_hints:
+                missing_parts.append(f"remedy: {'; '.join(harness_eval.remedy_hints)}")
+            return _finalize(
+                verdict="INCONCLUSIVE",
+                step_records=[],
+                criteria_results={},
+                retries_used=0,
+                usage_totals=usage_totals,
+                escalation={
+                    "kind": "escalation",
+                    "reason": "harness_requirements_missing",
+                    "detail": "; ".join(missing_parts),
+                },
+                requested_report_kind="escalation",
+            )
+
         for step in flow.steps:
             if step.run_on_demand:
                 continue

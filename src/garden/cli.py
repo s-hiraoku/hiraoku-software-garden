@@ -87,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
     doc_cmd.add_argument("--approval-branch", default="main")
     doc_cmd.add_argument("--json", action="store_true", dest="as_json")
     doc_cmd.add_argument("--skip-network", action="store_true")
+    doc_cmd.add_argument(
+        "--strict-harness",
+        action="store_true",
+        help="require pstack core skills even for observe_only definitions without real agent steps",
+    )
 
     upg_cmd = commands.add_parser("upgrade", help="plan or apply a template upgrade safely")
     upg_cmd.add_argument("--target", type=Path, default=Path.cwd())
@@ -266,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             args.target,
             skip_network=args.skip_network,
             approval_branch=args.approval_branch,
+            strict_harness=args.strict_harness,
         )
         if args.as_json:
             print(
