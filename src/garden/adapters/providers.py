@@ -54,6 +54,16 @@ def select_pr_fix_findings(
     return included, truncated
 
 
+def _inline_code(text: str) -> str:
+    """Wrap single-line text in an inline Markdown code span safe against backticks."""
+    clean = " ".join(str(text or "").split())
+    longest = max((len(m.group(0)) for m in re.finditer(r"`+", clean)), default=0)
+    delim = "`" * (longest + 1)
+    if clean.startswith("`") or clean.endswith("`") or clean.startswith(" ") or clean.endswith(" "):
+        return f"{delim} {clean} {delim}"
+    return f"{delim}{clean}{delim}"
+
+
 def _fence_block(text: str, lang: str = "markdown") -> list[str]:
     """Wrap untrusted text in a Markdown code fence longer than any contained backtick run."""
     longest_ticks = max(
@@ -168,16 +178,29 @@ def build_agent_prompt(request: AgentRequest) -> str:
             ]
         )
         if pr_url:
-            sections.append(f"- PR URL: `{pr_url}`")
+            sections.append(f"- PR URL: {_inline_code(pr_url)}")
         if base_branch:
-            sections.append(f"- Base branch: `{base_branch}`")
+            sections.append(f"- Base branch: {_inline_code(base_branch)}")
 
         conflict_files = pr_fix_ctx.get("conflict_files") or []
         if isinstance(conflict_files, list) and conflict_files:
             sections.append(
                 "- Merge conflict files: "
-                + ", ".join(f"`{f}`" for f in conflict_files if str(f).strip())
+                + ", ".join(_inline_code(str(f)) for f in conflict_files if str(f).strip())
             )
+
+        prev_local = pr_fix_ctx.get("previous_local_failure")
+        if isinstance(prev_local, dict) and prev_local.get("reason"):
+            sections.extend(
+                [
+                    "",
+                    "### Previous Local Verification Failure (Must Fix Before Push)",
+                    f"- Reason: {_inline_code(str(prev_local.get('reason')))}",
+                ]
+            )
+            prev_detail = str(prev_local.get("detail") or "").strip()
+            if prev_detail:
+                sections.extend(_fence_block(prev_detail[:MAX_STDERR_EXCERPT_CHARS], "text"))
 
         failed_checks = pr_fix_ctx.get("failed_checks") or []
         if isinstance(failed_checks, list) and failed_checks:
@@ -188,9 +211,9 @@ def build_agent_prompt(request: AgentRequest) -> str:
                 cname = " ".join(str(chk.get("name") or "check").split())
                 concl = " ".join(str(chk.get("conclusion") or "FAILURE").split())
                 curl = " ".join(str(chk.get("details_url") or "").split())
-                line = f"- `{cname}` (`{concl}`)"
+                line = f"- {_inline_code(cname)} ({_inline_code(concl)})"
                 if curl:
-                    line += f" — `{curl}`"
+                    line += f" — {_inline_code(curl)}"
                 sections.append(line)
                 excerpt = str(chk.get("log_excerpt") or "").strip()
                 if excerpt:
@@ -209,9 +232,13 @@ def build_agent_prompt(request: AgentRequest) -> str:
                     fpath = " ".join(str(finding.get("path") or "").split())
                     fline = finding.get("line")
                     fbody = str(finding.get("body") or "").strip()
-                    loc = f" at `{fpath}:{fline}`" if fpath and fline else (f" at `{fpath}`" if fpath else "")
+                    loc = (
+                        f" at {_inline_code(f'{fpath}:{fline}')}"
+                        if fpath and fline
+                        else (f" at {_inline_code(fpath)}" if fpath else "")
+                    )
                     assoc_note = f" ({assoc})" if assoc else ""
-                    sections.append(f"#### Finding {idx} by `{author}`{assoc_note}{loc}")
+                    sections.append(f"#### Finding {idx} by {_inline_code(author)}{assoc_note}{loc}")
                     sections.extend(_fence_block(fbody, "markdown"))
                 if was_truncated:
                     sections.append("...(additional review findings deferred to next round)...")

@@ -42,7 +42,8 @@ from garden.spec import verify_trust_anchor
 
 def _post_issue_note(
     issue_number: int, body: str, *, cwd: Path, gh_repo: str | None = None
-) -> None:
+) -> str | None:
+    """Post an operational comment to the Issue, returning a warning string on failure (never raising)."""
     args = ["gh", "issue", "comment", str(issue_number), "--body-file"]
     with tempfile.TemporaryDirectory() as tmp_dir:
         body_path = Path(tmp_dir) / "issue-note.md"
@@ -50,14 +51,20 @@ def _post_issue_note(
         cmd = [*args, str(body_path)]
         if gh_repo:
             cmd.extend(["-R", gh_repo])
-        subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as error:
+            return f"issue comment failed: {error}"
+    if proc.returncode != 0:
+        return proc.stderr.strip() or proc.stdout.strip() or "gh issue comment failed"
+    return None
 
 
 def _find_existing_open_pr(
@@ -177,7 +184,7 @@ def work_issue(
         )
 
     root = repo_root(target_path)
-    _, gh_repo = _resolve_origin_repo(root)
+    origin_repo_id, gh_repo = _resolve_origin_repo(root)
 
     if issue_file is not None:
         issue_ctx = load_issue_context_file(issue_file)
@@ -200,8 +207,20 @@ def work_issue(
     resolved_flow = _resolve_work_flow_name(
         root, flow_name, approval_branch=approval_branch
     )
+    issue_repo_id = issue_ctx.get("repository")
+    repo_verified_for_issue_updates = (
+        issue_file is None
+        or (
+            origin_repo_id is not None
+            and issue_repo_id is not None
+            and origin_repo_id == issue_repo_id
+        )
+    )
     should_touch_github_issue = bool(
-        post_issue_updates and not dry_run and effective_issue_num is not None
+        post_issue_updates
+        and not dry_run
+        and effective_issue_num is not None
+        and repo_verified_for_issue_updates
     )
 
     marked_running = False
@@ -223,10 +242,11 @@ def work_issue(
             fetch_issue=False,
         )
 
+        actual_flow = str(run_res.run_data.get("flow") or resolved_flow)
         summary: dict[str, Any] = {
             "target": str(root),
             "issue_number": effective_issue_num,
-            "flow": resolved_flow,
+            "flow": actual_flow,
             "run_id": run_res.run_id,
             "run_dir": str(run_res.run_dir) if run_res.run_dir else None,
             "verdict": run_res.verdict,
@@ -236,6 +256,7 @@ def work_issue(
             "reflect": None,
             "pr_url": None,
             "pr_number": None,
+            "issue_note_warning": None,
             "watch": None,
             "exit_code": run_res.exit_code,
         }
@@ -265,8 +286,9 @@ def work_issue(
             summary["resumed_existing_pr"] = True
             if should_touch_github_issue:
                 assert effective_issue_num is not None
-                clear_github_running(effective_issue_num, cwd=root)
-                marked_running = False
+                clear_res = clear_github_running(effective_issue_num, cwd=root)
+                if not clear_res.get("label_warning"):
+                    marked_running = False
         else:
             # Always cap reflect to propose_pr: `garden work` never enables auto-merge!
             ref_res = reflect_run(
@@ -300,15 +322,17 @@ def work_issue(
             if should_touch_github_issue:
                 assert effective_issue_num is not None
                 # Include canonical Garden operational marker so future Issue fetches exclude it!
-                _post_issue_note(
+                note_warn = _post_issue_note(
                     effective_issue_num,
                     f"<!-- garden:v1 kind=work_pr_created run_id={run_res.run_id} pr={pr_num or 0} -->\n"
                     f"### [Garden] PR を作成しました\n\n- PR: {pr_url}\n- Run ID: `{run_res.run_id}`\n",
                     cwd=root,
                     gh_repo=gh_repo,
                 )
-                clear_github_running(effective_issue_num, cwd=root)
-                marked_running = False
+                summary["issue_note_warning"] = note_warn
+                clear_res = clear_github_running(effective_issue_num, cwd=root)
+                if not clear_res.get("label_warning"):
+                    marked_running = False
 
         if not watch or summary["pr_number"] is None:
             summary["exit_code"] = 0
@@ -317,7 +341,7 @@ def work_issue(
         watch_res = watch_pr(
             root,
             int(summary["pr_number"]),
-            flow_name=resolved_flow,
+            flow_name=actual_flow,
             agent_name=agent_name,
             approval_branch=approval_branch,
             poll_interval_sec=watch_poll_sec,

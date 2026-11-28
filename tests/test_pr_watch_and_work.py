@@ -667,8 +667,9 @@ class PrWatchAndWorkIntegrationTests(unittest.TestCase):
 
             with (
                 patch("garden.work._find_existing_open_pr", return_value=None),
+                patch("garden.work._resolve_origin_repo", return_value=("github.com/example/app", "example/app")),
                 patch("garden.work.mark_github_running", return_value={}),
-                patch("garden.work.clear_github_running", return_value={}),
+                patch("garden.work.clear_github_running", return_value={"label_warning": None}),
                 patch("garden.work._post_issue_note", side_effect=_fake_note),
                 patch("garden.publish.subprocess.run", side_effect=_fake_publish_run),
                 patch("garden.work.watch_pr", side_effect=_fake_watch),
@@ -686,6 +687,16 @@ class PrWatchAndWorkIntegrationTests(unittest.TestCase):
             self.assertFalse(any(cmd[:3] == ["gh", "pr", "merge"] for cmd in gh_calls))
             # Issue PR creation note carries Garden marker so future fetches exclude it!
             self.assertTrue(posted_issue_notes and parse_garden_markers(posted_issue_notes[0]))
+
+            # 2b) Unverified/mismatched --issue-file repo MUST NOT touch live GitHub Issue even with post_issue_updates=True
+            with (
+                patch("garden.work._find_existing_open_pr", return_value=(105, "https://github.com/example/app/pull/105")),
+                patch("garden.work._resolve_origin_repo", return_value=("github.com/other/repo", "other/repo")),
+                patch("garden.work.mark_github_running") as mock_mark,
+                patch("garden.work.watch_pr", side_effect=_fake_watch),
+            ):
+                work_issue(repo, issue_file=issue_file, post_issue_updates=True)
+            mock_mark.assert_not_called()
 
             # 3) Retrying `work_issue` after PR creation resumes existing PR without re-running reflect_run!
             watch_calls.clear()

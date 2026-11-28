@@ -1177,6 +1177,9 @@ def _list_unmerged_files(worktree: Path) -> list[str]:
 
 
 def _has_conflict_markers(file_path: Path) -> bool:
+    if not file_path.exists():
+        # Allow intentional deletion as a valid resolution of modify/delete conflicts
+        return False
     if not file_path.is_file():
         return True
     try:
@@ -1232,6 +1235,31 @@ def _seatbelt_escape(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+_BWRAP_OK_CACHE: bool | None = None
+
+
+def _bwrap_usable() -> bool:
+    """Probe once whether bubblewrap can create user namespaces in this kernel/AppArmor environment."""
+    global _BWRAP_OK_CACHE
+    if _BWRAP_OK_CACHE is not None:
+        return _BWRAP_OK_CACHE
+    if platform.system() != "Linux" or not shutil.which("bwrap"):
+        _BWRAP_OK_CACHE = False
+        return False
+    try:
+        probe = subprocess.run(
+            ["bwrap", "--ro-bind", "/", "/", "--", "/bin/true"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        _BWRAP_OK_CACHE = probe.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        _BWRAP_OK_CACHE = False
+    return _BWRAP_OK_CACHE
+
+
 def _resolve_pr_sandbox_prefix(
     worktree: Path,
     step_dir: Path,
@@ -1262,7 +1290,6 @@ def _resolve_pr_sandbox_prefix(
             Path("/var/folders"),
             Path("/private/var/folders"),
         ]
-        # Git worktree metadata lives under the parent repo's .git/worktrees/<name>
         git_file = wt_res / ".git"
         if git_file.is_file():
             try:
@@ -1296,24 +1323,25 @@ def _resolve_pr_sandbox_prefix(
         )
         return ("sandbox-exec", "-p", profile)
 
-    if platform.system() == "Linux" and shutil.which("bwrap"):
+    if _bwrap_usable():
+        # Mount --tmpfs /tmp BEFORE --bind worktree/step_dir so paths inside /tmp stay visible!
         cmd = [
             "bwrap",
             "--ro-bind",
             "/",
             "/",
-            "--bind",
-            str(wt_res),
-            str(wt_res),
-            "--bind",
-            str(step_res),
-            str(step_res),
             "--dev",
             "/dev",
             "--proc",
             "/proc",
             "--tmpfs",
             "/tmp",
+            "--bind",
+            str(wt_res),
+            str(wt_res),
+            "--bind",
+            str(step_res),
+            str(step_res),
         ]
         if not allow_network:
             cmd.append("--unshare-net")
@@ -1344,12 +1372,13 @@ def _run_pr_fix_round(
     agent_name: str | None,
     approval_branch: str,
     cumulative_cost_known: float,
-    started_mono: float,
     unaddressed_findings: list[PrReviewFinding],
+    previous_local_failure: dict[str, Any] | None = None,
     sandbox_cmd: tuple[str, ...] = (),
     trust_pr_code: bool = False,
 ) -> dict[str, Any]:
     """Execute one isolated, sandboxed, commit-before-verify fix round for a PR."""
+    round_started_mono = time.monotonic()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     round_dir = root / ".garden" / "runs" / f"pr-watch-{snapshot.number}-{stamp}-r{round_num}"
     round_dir.mkdir(parents=True, exist_ok=True)
@@ -1610,6 +1639,7 @@ def _run_pr_fix_round(
                         "conflict_files": conflict_files,
                         "failed_checks": failed_checks,
                         "review_findings": selected_findings_dicts,
+                        "previous_local_failure": previous_local_failure,
                     }
                 },
             )
@@ -1687,7 +1717,7 @@ def _run_pr_fix_round(
             agent_max_cost_usd=agent_cfg.max_cost_usd,
             cumulative_cost_usd=next_cum_cost,
             allow_unknown_cost=agent_cfg.allow_unknown_cost,
-            elapsed_sec=time.monotonic() - started_mono,
+            elapsed_sec=time.monotonic() - round_started_mono,
             baseline_untracked=baseline_untracked,
             ignore_prefixes=(".garden/runs/", ".garden/worktrees/"),
             ignore_paths=untouched_base_paths,
@@ -1823,7 +1853,30 @@ def _run_pr_fix_round(
                     "cost_usd": step_cost_usd,
                 }
 
-        # 4) Push the EXACT verified candidate_sha non-force!
+        # 4) Verify remote PR branch still exists at actual_head before pushing (never recreate deleted branch)
+        ls_proc = git_run(
+            wt_path, "ls-remote", "origin", f"refs/heads/{snapshot.head_ref_name}"
+        )
+        remote_lines = [ln.strip() for ln in ls_proc.stdout.splitlines() if ln.strip()]
+        if ls_proc.returncode != 0 or not remote_lines:
+            return {
+                "outcome": "needs_human",
+                "reason": "pr_branch_deleted_remotely",
+                "detail": f"remote branch refs/heads/{snapshot.head_ref_name} no longer exists; refusing to recreate",
+                "pushed": False,
+                "cost_usd": step_cost_usd,
+            }
+        remote_sha = remote_lines[0].split()[0]
+        if remote_sha != actual_head:
+            return {
+                "outcome": "waiting",
+                "reason": "pr_head_moved_concurrently",
+                "detail": f"remote branch advanced to {remote_sha[:12]} during verification",
+                "pushed": False,
+                "cost_usd": step_cost_usd,
+            }
+
+        # Push the EXACT verified candidate_sha non-force!
         push_proc = git_run(
             wt_path,
             "push",
@@ -1889,13 +1942,20 @@ def watch_pr(
     root = repo_root(target_path)
     origin_repo_id, gh_repo = _resolve_origin_repo(root)
     started_mono = time.monotonic()
+    deadline_mono = started_mono + max_wait_sec
     rounds_used = 0
     cumulative_cost_known = 0.0
     cost_unknown = False
     round_history: list[dict[str, Any]] = []
     stale_pre_push_head: str | None = None
     addressed_finding_versions: set[str] = set()
+    previous_local_failure: dict[str, Any] | None = None
     perm_cache: dict[str, str | None] = {}
+
+    def _sleep_capped() -> None:
+        remaining = deadline_mono - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(poll_interval_sec, remaining))
 
     while True:
         snapshot = fetch_pr_snapshot(
@@ -1973,7 +2033,7 @@ def watch_pr(
 
         # If GitHub hasn't yet refreshed past the pre-push HEAD we already fixed, wait!
         if stale_pre_push_head is not None and snapshot.head_ref_oid == stale_pre_push_head:
-            if once or time.monotonic() - started_mono >= max_wait_sec:
+            if once or time.monotonic() >= deadline_mono:
                 return {
                     "pr_number": pr_number,
                     "pr_url": snapshot.url,
@@ -1983,7 +2043,7 @@ def watch_pr(
                     "rounds": round_history,
                     "exit_code": 0,
                 }
-            time.sleep(poll_interval_sec)
+            _sleep_capped()
             continue
         if stale_pre_push_head is not None and snapshot.head_ref_oid != stale_pre_push_head:
             stale_pre_push_head = None
@@ -2003,6 +2063,7 @@ def watch_pr(
                 "cost_usd": None if cost_unknown else cumulative_cost_known,
                 "cost_unknown": cost_unknown,
                 "labels": label_res,
+                "label_warning": label_res.get("label_warning"),
                 "exit_code": 0,
             }
 
@@ -2032,7 +2093,7 @@ def watch_pr(
                     "rounds": round_history,
                     "exit_code": 0,
                 }
-            if time.monotonic() - started_mono >= max_wait_sec:
+            if time.monotonic() >= deadline_mono:
                 label_res = _set_pr_managed_label(
                     pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
                 )
@@ -2055,8 +2116,33 @@ def watch_pr(
                     "labels": label_res,
                     "exit_code": VERDICT_EXIT_CODES["NEEDS_HUMAN"],
                 }
-            time.sleep(poll_interval_sec)
+            _sleep_capped()
             continue
+
+        # Check watch deadline BEFORE starting a new fix round (unless --once)
+        if not once and time.monotonic() >= deadline_mono:
+            label_res = _set_pr_managed_label(
+                pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
+            )
+            _post_pr_comment(
+                pr_number,
+                f"<!-- garden:v1 kind=pr_watch_timeout pr={pr_number} -->\n"
+                f"### [Garden] PR 監視の上限時間に到達しました\n\n"
+                f"- 残課題: {', '.join(classification['reasons'])}\n"
+                f"- 修正ラウンド: {rounds_used}/{max_rounds}\n",
+                cwd=root,
+                gh_repo=gh_repo,
+            )
+            return {
+                "pr_number": pr_number,
+                "pr_url": snapshot.url,
+                "status": "needs_human",
+                "reasons": ["max_wait_sec_exceeded", *classification["reasons"]],
+                "rounds_used": rounds_used,
+                "rounds": round_history,
+                "labels": label_res,
+                "exit_code": VERDICT_EXIT_CODES["NEEDS_HUMAN"],
+            }
 
         # status == "needs_fix"
         has_conflict = (
@@ -2133,8 +2219,8 @@ def watch_pr(
             agent_name=agent_name,
             approval_branch=approval_branch,
             cumulative_cost_known=cumulative_cost_known,
-            started_mono=started_mono,
             unaddressed_findings=unaddressed_findings,
+            previous_local_failure=previous_local_failure,
             sandbox_cmd=sandbox_cmd,
             trust_pr_code=trust_pr_code,
         )
@@ -2147,8 +2233,8 @@ def watch_pr(
 
         outcome = round_res["outcome"]
         if outcome == "pushed":
-            # Wait only while GitHub still reports the PRE-PUSH HEAD; new HEAD results proceed immediately!
             stale_pre_push_head = snapshot.head_ref_oid
+            previous_local_failure = None
             for vkey in round_res.get("delivered_finding_versions") or []:
                 addressed_finding_versions.add(str(vkey))
             if once:
@@ -2161,7 +2247,7 @@ def watch_pr(
                     "rounds": round_history,
                     "exit_code": 0,
                 }
-            if time.monotonic() - started_mono >= max_wait_sec:
+            if time.monotonic() >= deadline_mono:
                 return {
                     "pr_number": pr_number,
                     "pr_url": snapshot.url,
@@ -2171,7 +2257,7 @@ def watch_pr(
                     "rounds": round_history,
                     "exit_code": 0,
                 }
-            time.sleep(poll_interval_sec)
+            _sleep_capped()
             continue
 
         if outcome == "waiting":
@@ -2185,7 +2271,7 @@ def watch_pr(
                     "rounds": round_history,
                     "exit_code": 0,
                 }
-            time.sleep(poll_interval_sec)
+            _sleep_capped()
             continue
 
         if outcome == "inconclusive":
@@ -2205,6 +2291,10 @@ def watch_pr(
             }
 
         if outcome == "local_check_failed":
+            previous_local_failure = {
+                "reason": str(round_res.get("reason") or "local_check_failed"),
+                "detail": str(round_res.get("detail") or ""),
+            }
             if once or rounds_used >= max_rounds:
                 label_res = _set_pr_managed_label(
                     pr_number, "garden:needs-human", cwd=root, gh_repo=gh_repo
