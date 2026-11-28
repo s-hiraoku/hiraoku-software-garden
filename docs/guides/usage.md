@@ -118,12 +118,13 @@ CLI の引数やガーデン定義に誤りがある場合は、終了コード 
 
 ## 4. 共通の開発ハーネスと対象固有のハーネスを整える
 
-共通の開発ハーネスと対象固有のハーネスの責務分担は [用語集（ユビキタス言語）](../../GLOSSARY.md) と [概要設計書 §4](../design/overview.md#4-ナーサリー対象リポジトリ実行環境の責務) を参照してください。導入時は次の手順で環境を整えます。
+共通の開発ハーネスと対象固有のハーネスの責務分担は [用語集（ユビキタス言語）](../../GLOSSARY.md) と [概要設計書 §4](../design/overview.md#4-ナーサリー対象リポジトリ実行環境の責務)、各環境（Antigravity / Cursor / Claude Code / Codex / CI）向けの詳しい導入手順は [ハーネス導入ガイド](harness-setup.md) を参照してください。導入時は次の手順で環境を整えます。
 
-1. **共通の開発ハーネス（pstack）を配置する。** [harnesses/pstack.toml](../../harnesses/pstack.toml) の `upstream` と `pinned_ref` に従い、`~/.gemini/config/plugins/pstack`、`~/.cursor/plugins/pstack`、または対象リポジトリの `.agents/skills` に pstack を配置します。
-2. **対象固有のハーネスを対象リポジトリへ実装する。** 製品の起動、操作、期待結果の確認、および環境不備（終了コード `75`）と挙動不一致（終了コード `1`）の切り分けを行うチェックコマンドを対象リポジトリに置きます。
-3. **`.garden/garden.toml` からチェックを結びつける。** `[checks.<名前>]` にコマンド配列と `covers`、`required_evidence` を設定し、`garden doctor` で起動確認と pstack 検出を確かめます。
-4. **再発した失敗をチェックへ取り込む。** 手直しが必要になった場合は `garden feedback` で介入を記録し、対象固有のハーネスへ再発防止チェックを追加してから再実行で効果を確認します。
+1. **不足要件と環境別手順を確認する。** `garden harness guide --target .` で不足している必須スキル・必須 MCP とテンプレート標準パターンの差分を確認します。
+2. **共通の開発ハーネス（pstack）を配置する。** `garden harness sync-pstack --adapter <antigravity|cursor|claude|codex|repo> --apply` で [harnesses/pstack.toml](../../harnesses/pstack.toml) の固定 SHA 版 pstack を同期します（既定はドライラン）。
+3. **対象固有のハーネスを対象リポジトリへ実装する。** 製品の起動、操作、期待結果の確認、および環境不備（終了コード `75`）と挙動不一致（終了コード `1`）の切り分けを行うチェックコマンドを対象リポジトリに置きます。
+4. **`.garden/garden.toml` からチェックと必須要件を結びつける。** `[checks.<名前>]` と必要に応じて `required_skills` / `required_mcp` を設定し、`garden doctor --strict-harness --probe-mcp` で起動・設定・MCP 疎通を確かめます。
+5. **再発した失敗をチェックへ取り込む。** 手直しが必要になった場合は `garden feedback` で介入を記録し、対象固有のハーネスへ再発防止チェックを追加してから再実行で効果を確認します。
 
 ---
 
@@ -181,6 +182,8 @@ python3 garden.py --workspace "$PWD/../projects" --catalog my-garden.toml check 
 
 | コマンド | 用途 |
 | --- | --- |
+| `garden harness guide [--target <path>] [--adapter all\|antigravity\|cursor\|claude\|codex] [--strict-harness] [--probe-mcp] [--json]` | 不足している必須スキル・必須 MCP とテンプレート推奨パターン、環境別の導入手順を表示する |
+| `garden harness sync-pstack [--adapter antigravity\|cursor\|claude\|codex\|repo] [--dest <path>] [--apply] [--json]` | `harnesses/pstack.toml` の固定 SHA 版 pstack を検証付きで同期する（既定はドライラン） |
 | `garden upgrade --target <path> [--to <版>] [--apply]` | テンプレートの新しい版との差分を示し、`--apply` で独自の設定を保ったまま更新する |
 | `garden spec-diff --target <path> [--base main] [--head REF]` | 承認済み仕様との条件単位差分と影響チェック・フローを解析する |
 | `garden template-gate (--type TYPE \| --all) [--version N] [--output PATH]` | テンプレート公開ゲートを実行し `release-evidence.json` を生成する（`--type` または `--all` のどちらか必須） |

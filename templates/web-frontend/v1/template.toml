@@ -12,6 +12,13 @@ name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
 
+[standard_harness]
+common_required_skills = ["create-verification-skill", "maintain-verification-skill"]
+target_required_skills = []
+target_required_mcp = ["playwright"]
+recommended_checks = ["ui_smoke", "build_and_typecheck", "browser_e2e"]
+notes = "Web フロントエンドは実ブラウザ操作（Playwright MCP / Playwright Test）で表示・操作・永続化を検証する。"
+
 [defaults.delegation]
 mode = "observe_only"
 allowed_paths = []

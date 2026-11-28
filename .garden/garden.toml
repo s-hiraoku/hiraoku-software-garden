@@ -16,6 +16,10 @@ skills = [
 [target_harness]
 name = "nursery-self-harness"
 version = 1
+required_skills = [
+  "formal-verify-garden-engine",
+  "verify-garden",
+]
 
 [spec]
 paths = ["docs/specs/nursery-cli.md"]

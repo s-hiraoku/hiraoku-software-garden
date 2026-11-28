@@ -12,6 +12,13 @@ name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
 
+[standard_harness]
+common_required_skills = ["create-verification-skill", "maintain-verification-skill"]
+target_required_skills = []
+target_required_mcp = []
+recommended_checks = ["smoke", "cli_exit_codes", "stdout_stderr_contract"]
+notes = "CLI は終了コード・標準出力/標準エラー・隔離一時ディレクトリでの副作用を実コマンドで検証する。"
+
 [defaults.delegation]
 mode = "observe_only"
 allowed_paths = []

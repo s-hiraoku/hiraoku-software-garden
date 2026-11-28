@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
-from garden.definition import DefinitionError, load_definition_bytes
+from garden.definition import DefinitionError, load_definition, load_definition_bytes
 from garden.doctor import run_doctor
 from garden.engine import run_flow
-from garden.harness import discover_configured_mcp_servers, discover_installed_skills
-from tests.helpers import PSTACK_SHA, commit_all, init_target_repo, sample_spec
+from garden.git_utils import head_commit
+from garden.harness import (
+    discover_configured_mcp_servers,
+    discover_installed_skills,
+    probe_mcp_server,
+)
+from garden.harness_setup import (
+    build_harness_guide,
+    format_harness_guide_markdown,
+    sync_pstack,
+)
+from garden.templates import init_garden
+from tests.helpers import PSTACK_SHA, commit_all, init_target_repo, run_cli, sample_spec
 
 
 def _write_skill(root: Path, name: str, *, nested: bool = False) -> Path:
@@ -578,3 +592,252 @@ check = "c1"
                 wt_root = repo / ".garden" / "worktrees"
                 remaining = list(wt_root.iterdir()) if wt_root.exists() else []
                 self.assertEqual(remaining, [])
+
+    def test_doctor_probe_mcp_stdio_and_http_live_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = _make_garden_repo(base / "proj", target_required_mcp=["demo"])
+
+            # 1. Passing stdio MCP mock server
+            ok_srv = base / "mcp_ok.py"
+            ok_srv.write_text(
+                "import json, sys\n"
+                "line = sys.stdin.readline()\n"
+                "req = json.loads(line)\n"
+                "print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': {'protocolVersion': '2024-11-05'}}), flush=True)\n",
+                encoding="utf-8",
+            )
+            bad_srv = base / "mcp_err.py"
+            bad_srv.write_text(
+                "import json, sys\n"
+                "line = sys.stdin.readline()\n"
+                "req = json.loads(line)\n"
+                "print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32000, 'message': 'boom'}}), flush=True)\n",
+                encoding="utf-8",
+            )
+
+            mcp_cfg = base / "mcp.json"
+            mcp_cfg.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "demo": {"command": sys.executable, "args": [str(ok_srv)]}
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(mcp_cfg)}):
+                code_ok, items_ok = run_doctor(repo, skip_network=True, probe_mcp=True)
+                self.assertEqual(code_ok, 0, [i.to_dict() for i in items_ok])
+                self.assertIn("probed", {i.id: i for i in items_ok}["required_mcp"].detail)
+
+            # 2. Failing stdio JSON-RPC error
+            mcp_cfg.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "demo": {"command": sys.executable, "args": [str(bad_srv)]}
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(mcp_cfg)}):
+                code_err, items_err = run_doctor(repo, skip_network=True, probe_mcp=True)
+                self.assertEqual(code_err, 1)
+                detail_err = {i.id: i for i in items_err}["required_mcp"].detail
+                self.assertIn("boom", detail_err)
+
+            # 3. Missing executable
+            ok_miss, msg_miss = probe_mcp_server(
+                {"command": "definitely-nonexistent-mcp-bin-xyz"}, repo
+            )
+            self.assertFalse(ok_miss)
+            self.assertIn("executable not found", msg_miss)
+
+            # 4. Live HTTP MCP server (200 JSON-RPC ok & 401 auth required)
+            class _Handler(BaseHTTPRequestHandler):
+                def log_message(self, format: str, *args: object) -> None:
+                    return
+
+                def do_POST(self) -> None:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = self.rfile.read(length).decode("utf-8")
+                    if self.path == "/auth":
+                        self.send_response(401)
+                        self.end_headers()
+                        return
+                    req = json.loads(body)
+                    resp = json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": req["id"],
+                            "result": {"protocolVersion": "2024-11-05"},
+                        }
+                    ).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+            port = httpd.server_address[1]
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                mcp_cfg.write_text(
+                    json.dumps(
+                        {"mcpServers": {"demo": {"url": f"http://127.0.0.1:{port}/mcp"}}}
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(mcp_cfg)}):
+                    code_http, items_http = run_doctor(
+                        repo, skip_network=True, probe_mcp=True
+                    )
+                    self.assertEqual(code_http, 0, [i.to_dict() for i in items_http])
+
+                mcp_cfg.write_text(
+                    json.dumps(
+                        {"mcpServers": {"demo": {"url": f"http://127.0.0.1:{port}/auth"}}}
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict(os.environ, {"GARDEN_MCP_CONFIG_PATHS": str(mcp_cfg)}):
+                    code_401, items_401 = run_doctor(
+                        repo, skip_network=True, probe_mcp=True
+                    )
+                    self.assertEqual(code_401, 1)
+                    self.assertIn(
+                        "HTTP 401",
+                        {i.id: i for i in items_401}["required_mcp"].detail,
+                    )
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
+    def test_sync_pstack_dry_run_and_apply_plugin_and_skills_layouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            # Create a local disposable upstream repo containing pinned pstack subpath
+            upstream_repo = init_target_repo(base / "upstream-pstack")
+            for core in (
+                "poteto-mode",
+                "correct",
+                "create-verification-skill",
+                "maintain-verification-skill",
+            ):
+                _write_skill(upstream_repo / "pstack", core, nested=True)
+            commit_all(upstream_repo, "add pstack core skills")
+            pinned_sha = head_commit(upstream_repo)
+
+            nursery = base / "nursery"
+            (nursery / "harnesses").mkdir(parents=True)
+            (nursery / "harnesses" / "pstack.toml").write_text(
+                f"""
+schema_version = 1
+name = "pstack"
+upstream = "{upstream_repo}"
+subpath = "pstack"
+pinned_ref = "{pinned_sha}"
+
+[skills]
+core = [
+  "poteto-mode",
+  "correct",
+  "create-verification-skill",
+  "maintain-verification-skill",
+]
+""",
+                encoding="utf-8",
+            )
+
+            # Dry-run must not write anything
+            plugin_dest = base / "antigravity-pstack"
+            plan = sync_pstack(
+                adapter="antigravity",
+                dest=plugin_dest,
+                apply=False,
+                nursery_root=nursery,
+            )
+            self.assertFalse(plan["applied"])
+            self.assertFalse(plugin_dest.exists())
+
+            # Apply in plugin layout (antigravity)
+            applied = sync_pstack(
+                adapter="antigravity",
+                dest=plugin_dest,
+                apply=True,
+                nursery_root=nursery,
+            )
+            self.assertTrue(applied["applied"])
+            self.assertEqual(
+                (plugin_dest / ".garden-pstack-ref").read_text(encoding="utf-8").strip(),
+                pinned_sha,
+            )
+            with patch.dict(os.environ, {"GARDEN_SKILL_PATHS": str(plugin_dest)}):
+                found = discover_installed_skills(base)
+                for core in applied["verified_core_skills"]:
+                    self.assertIn(core, found)
+
+            # Apply in skills_dir layout (codex) must preserve unrelated custom skills
+            skills_dest = base / "codex-skills"
+            custom_skill = _write_skill(skills_dest, "my-unrelated-skill")
+            applied_codex = sync_pstack(
+                adapter="codex",
+                dest=skills_dest,
+                apply=True,
+                nursery_root=nursery,
+            )
+            self.assertTrue(applied_codex["applied"])
+            self.assertTrue(custom_skill.is_file())
+            self.assertTrue((skills_dest / "poteto-mode" / "SKILL.md").is_file())
+
+    def test_init_with_standard_harness_and_harness_guide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_target_repo(base / "my-web-app")
+            (repo / "package.json").write_text(
+                '{"name":"web","dependencies":{"react":"^19.0.0","vite":"^6.0.0"}}',
+                encoding="utf-8",
+            )
+            commit_all(repo, "seed web repo")
+
+            init_res = init_garden(repo, with_standard_harness=True)
+            self.assertEqual(init_res["template"], "web-frontend")
+            self.assertTrue(init_res["with_standard_harness"])
+
+            defn = load_definition(repo / ".garden" / "garden.toml")
+            self.assertEqual(
+                defn.common_harness.required_skills,
+                ("create-verification-skill", "maintain-verification-skill"),
+            )
+            self.assertEqual(defn.target_harness.required_mcp, ("playwright",))
+
+            empty_skills = base / "empty-skills"
+            empty_skills.mkdir()
+            empty_mcp = base / "empty.mcp.json"
+            empty_mcp.write_text("{}", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "GARDEN_SKILL_PATHS": str(empty_skills),
+                    "GARDEN_MCP_CONFIG_PATHS": str(empty_mcp),
+                },
+            ):
+                guide = build_harness_guide(repo, adapter="all")
+                self.assertFalse(guide["status"]["ok"])
+                self.assertIn("playwright", guide["status"]["missing_mcp"])
+                self.assertIn("[mcp_servers.playwright]", guide["environments"]["codex"]["mcp_snippet"])
+                self.assertIn("@playwright/mcp@latest", guide["environments"]["antigravity"]["mcp_snippet"])
+                md = format_harness_guide_markdown(guide)
+                self.assertIn("garden harness sync-pstack --adapter codex --apply", md)
+
+            # CLI smoke for `garden harness sync-pstack` dry-run
+            proc = run_cli("harness", "sync-pstack", "--adapter", "codex", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            out = json.loads(proc.stdout)
+            self.assertFalse(out["applied"])
+            self.assertEqual(out["adapter"], "codex")

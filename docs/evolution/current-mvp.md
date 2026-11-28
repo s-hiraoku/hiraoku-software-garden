@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | **① 仕事の発見・受付** | Issue、ラベル、PR、スケジュール、CI 失敗など多様なイベントを受け、重複と対象を照合してフローを起動する | `[[triggers]]` の `auto` 解決、`garden-reusable.yml`（PR・PR 上の `/garden resume`・`workflow_dispatch`）、ローカルと HTML マーカーの冪等スキップを実装済み | 実運用は PR と手動実行が中心。`/garden resume` は PR 専用（非 PR の Issue は不可、権限者限定）であり、Issue 起票・`garden:ready` ラベル・CI 失敗起点の自動ワークフローは未実証 |
 | **② 仕様化** | 人が承認した仕様の原本と委譲範囲を基準に、改定時は影響差分を解析して仕事を組み替える | `docs/specs/*.md` のフロントマターと `AC-*` / `INV-*` 抽出、保護ブランチ基準の Trust Anchor 照合、`garden spec-diff` を実装済み | `spec-diff` は CLI として実装済みだが、仕様改定 PR 時の自動影響再検証ワークフローへの組み込みは MVP-7 で扱う |
-| **③ 実行管理** | 必須スキルと必須 MCP を含むハーネス環境を検証したうえで、着手順・分割・対象の版・権限を管理して隔離環境で実行する | 宣言的ステートマシン、`git worktree` 隔離と `verified_commit` 永続化、委譲厳格化バリデーター、必須スキル・必須 MCP の設定確認と Preflight `INCONCLUSIVE` 停止を実装済み | MCP の実接続確認、pstack 自動導入・テンプレート別標準パターンは MVP-6 後半。仕事の自動分割と優先順位付けは未実装で、単一リポジトリ・単一フロー単位に割り切っている |
+| **③ 実行管理** | 必須スキルと必須 MCP を含むハーネス環境を検証したうえで、着手順・分割・対象の版・権限を管理して隔離環境で実行する | 宣言的ステートマシン、`git worktree` 隔離と `verified_commit` 永続化、委譲厳格化バリデーター、必須スキル・必須 MCP の設定確認と任意の実接続確認（`--probe-mcp`）、`garden harness guide` / `sync-pstack`、Preflight `INCONCLUSIVE` 停止を実装済み | 仕事の自動分割と優先順位付けは未実装（MVP-7）で、単一リポジトリ・単一フロー単位に割り切っている |
 | **④ 調査・実装・修正** | 許可範囲内で再現、調査、実装、修正を行い、仕様判断が必要なら人へ問いを返す | `codex` / `claude` / `antigravity` / `custom` / `mock` の各アダプターと事後ガード（`guard.py`）を実装済み | 結合テストとモック検証は完了済みだが、実対象リポジトリでの実エージェントによる `fix_and_retry` 本番運用は MVP-7 で扱う |
 | **⑤ 検証** | 必須チェック、実挙動シナリオ、形式検証を同じ版で実行し、2 層判定と構造化証拠を残す | `check` / `formal_check` の 2 層判定、`required_evidence` / `formal.json` 検証、ナーサリー自身の有界全状態探索を実装済み | 対象リポジトリ側の形式検証適用は MVP-8 で扱う。複数リポジトリをまたぐ結合シナリオも未対応 |
 | **⑥ 反映・再修正・人への引き渡し** | 委譲範囲内の自動反映、再修正、証拠付きの結実通知、例外のエスカレーションを自律的に振り分ける | `garden report`（要約、HTML マーカー、ラベル自動作成、Artifacts URL）と `garden reflect`（祖先および差分検証付き PR 作成・自動マージゲート）を実装済み | 実対象リポジトリは安全な `observe_only` で運用中。`propose_pr` / `auto_merge` 実運用は MVP-7、結実後のリリース・デプロイ連携は MVP-8 で扱う |
@@ -55,8 +55,8 @@ Python 3.11 以上・標準ライブラリのみで動作する。モジュー�
 
 MVP-4 時点で意図的に割り切っている点と既知の制約をまとめる。各制約の解消手順と完了条件は [MVP 成長プラン](roadmap.md#4-今後の成長フェーズmvp-5mvp-8-と最終形) に記載している。
 
-1. **pstack 自動導入・エージェントプラグイン統合とテンプレート別必須 MCP パターン（対応予定: MVP-6 後半）**
-   `.garden/garden.toml` の `required_skills`・`required_mcp` および `harnesses/pstack.toml` の `[skills].core`（実エージェント利用時・`--strict-harness` 時）の宣言・`garden doctor` 厳格検査・Preflight `INCONCLUSIVE` 停止は実装済みである。pstack の自動導入コマンド、エージェントプラグイン連携、および各テンプレート別の標準必須スキル・MCP 定義は MVP-6 後半で整える。
+1. **実対象リポジトリでの必須スキル・必須 MCP の手元＋CI 横断実証（対応予定: MVP-6 完了確認）**
+   `.garden/garden.toml` の `required_skills`・`required_mcp` 宣言、`garden doctor --strict-harness --probe-mcp`、Preflight `INCONCLUSIVE` 停止、`garden harness guide` / `sync-pstack`、`garden-reusable.yml` の `sync_pstack` 入力、および 4 テンプレートの `[standard_harness]` 標準パターンはナーサリー側で実装済みである。残作業は 2 つ以上の実対象リポジトリで手元と CI の両方で同じ必須要件を診断する実運用確認である。
 2. **実対象リポジトリの既定モードは `observe_only`（対応予定: MVP-7）**
    全テンプレートと対象リポジトリの既定委譲モードを `observe_only` に固定している。実エージェントによる修正と `garden reflect` の PR 提案はハーネス標準化後に解放する。
    MVP-4 の事後ガードは、書き込み可能なモードで `allowed_paths` が空の場合に許可パスの照合を省く。書き込み範囲を絞るには非空のリストを指定する。フローで既定のリストを継承するときは `allowed_paths` を省略し、変更を禁止するときは `observe_only` を使う。
