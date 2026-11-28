@@ -53,6 +53,13 @@ ADAPTER_SKILL_DIRS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+ADAPTER_REPO_SKILL_DIR: dict[str, str] = {
+    "codex": ".agents/skills",
+    "claude": ".claude/skills",
+    "antigravity": ".agents/skills",
+    "cursor": ".cursor/skills",
+}
+
 # Per-adapter MCP configuration sources ordered from lowest to highest precedence.
 # Format: (path_template, kind, trusted_origin)
 #   kind in {"toml", "json", "claude_json_global", "claude_json_project", "schema_dir"}
@@ -86,6 +93,16 @@ ADAPTER_MCP_HINTS: dict[str, str] = {
     "cursor": ".cursor/mcp.json or ~/.cursor/mcp.json",
 }
 
+_AUTH_CONFIG_KEYS: tuple[str, ...] = (
+    "headers",
+    "http_headers",
+    "env_http_headers",
+    "bearer_token_env_var",
+)
+_HTTP_MAX_BODY_BYTES = 262144
+_SSE_MAX_EVENT_BYTES = 65536
+_SSE_MAX_TOTAL_BYTES = 262144
+
 
 @dataclass(frozen=True)
 class _McpEntry:
@@ -93,6 +110,9 @@ class _McpEntry:
     cfg: dict[str, Any] | None
     schema_dir: str | None = None
     trusted_origin: bool = False
+    auth_trusted: bool = True
+    auth_origin: tuple[str, str, int] | None = None
+    inherited_auth_origin_mismatch: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,6 +175,39 @@ def _is_within(path: Path, root: Path) -> bool:
         return r_path == r_root or r_root in r_path.parents
     except OSError:
         return False
+
+
+def _origin_tuple(url: str) -> tuple[str, str, int]:
+    parsed = urllib_parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if parsed.port is not None:
+        port = parsed.port
+    else:
+        port = 443 if scheme == "https" else 80
+    return scheme, host, port
+
+
+def _cfg_url(cfg: dict[str, Any] | None) -> str | None:
+    if not isinstance(cfg, dict):
+        return None
+    for key in ("url", "serverUrl"):
+        val = cfg.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _cfg_has_auth(cfg: dict[str, Any] | None) -> bool:
+    if not isinstance(cfg, dict):
+        return False
+    for key in _AUTH_CONFIG_KEYS:
+        val = cfg.get(key)
+        if isinstance(val, dict) and val:
+            return True
+        if isinstance(val, str) and val.strip():
+            return True
+    return False
 
 
 def _scan_skill_roots(roots: list[Path]) -> dict[str, str]:
@@ -284,22 +337,71 @@ def _apply_mcp_mapping(
                 cfg=None,
                 schema_dir=None,
                 trusted_origin=trusted_origin,
+                auth_trusted=trusted_origin,
+                auth_origin=None,
+                inherited_auth_origin_mismatch=False,
             )
             continue
+
+        incoming_has_auth = _cfg_has_auth(cfg)
+        incoming_url = _cfg_url(cfg)
         prev = state.get(name)
         if prev is not None and isinstance(prev.cfg, dict):
             merged = {**prev.cfg, **cfg}
             merged_trusted = prev.trusted_origin and trusted_origin
-            prev_schema = prev.schema_dir if not _is_valid_mcp_server_config(merged) else None
+            prev_schema = (
+                prev.schema_dir if not _is_valid_mcp_server_config(merged) else None
+            )
+            prev_has_auth = _cfg_has_auth(prev.cfg)
+
+            if incoming_has_auth:
+                merged_auth_trusted = (
+                    (prev.auth_trusted and trusted_origin)
+                    if prev_has_auth
+                    else trusted_origin
+                )
+            else:
+                merged_auth_trusted = prev.auth_trusted if prev_has_auth else True
+
+            merged_url = _cfg_url(merged)
+            merged_origin = _origin_tuple(merged_url) if merged_url else None
+
+            if incoming_has_auth and trusted_origin and merged_origin is not None:
+                auth_origin = merged_origin
+                origin_mismatch = False
+            elif prev_has_auth and prev.auth_origin is not None:
+                auth_origin = prev.auth_origin
+                origin_mismatch = (
+                    incoming_url is not None
+                    and merged_origin is not None
+                    and merged_origin != prev.auth_origin
+                ) or prev.inherited_auth_origin_mismatch
+            else:
+                auth_origin = (
+                    merged_origin if (incoming_has_auth and trusted_origin) else None
+                )
+                origin_mismatch = prev.inherited_auth_origin_mismatch
         else:
             merged = dict(cfg)
             merged_trusted = trusted_origin
             prev_schema = None
+            merged_auth_trusted = trusted_origin if incoming_has_auth else True
+            merged_url = _cfg_url(merged)
+            auth_origin = (
+                _origin_tuple(merged_url)
+                if (incoming_has_auth and trusted_origin and merged_url)
+                else None
+            )
+            origin_mismatch = False
+
         state[name] = _McpEntry(
             source=source,
             cfg=merged,
             schema_dir=prev_schema,
             trusted_origin=merged_trusted,
+            auth_trusted=merged_auth_trusted,
+            auth_origin=auth_origin,
+            inherited_auth_origin_mismatch=origin_mismatch,
         )
 
 
@@ -532,13 +634,29 @@ _MCP_INITIALIZE_PAYLOAD = json.dumps(
 
 
 def _check_jsonrpc_object(obj: Any) -> tuple[bool, str | None]:
-    if not isinstance(obj, dict) or obj.get("id") != 1:
+    if not isinstance(obj, dict):
         return False, None
+    if obj.get("id") != 1:
+        return False, None
+    if obj.get("jsonrpc") != "2.0":
+        return False, "invalid JSON-RPC response (expected jsonrpc='2.0')"
     if "error" in obj and obj["error"] is not None:
         err = obj["error"]
         msg = err.get("message") if isinstance(err, dict) else str(err)
         return False, f"initialize error: {msg}"
     if "result" in obj:
+        res = obj["result"]
+        if not isinstance(res, dict):
+            return False, "invalid MCP initialize result (expected object)"
+        if not _is_non_empty_str(res.get("protocolVersion")):
+            return False, "invalid MCP initialize result (missing protocolVersion)"
+        if not isinstance(res.get("capabilities"), dict):
+            return False, "invalid MCP initialize result (missing capabilities object)"
+        server_info = res.get("serverInfo")
+        if not isinstance(server_info, dict) or not _is_non_empty_str(
+            server_info.get("name")
+        ):
+            return False, "invalid MCP initialize result (missing serverInfo.name)"
         return True, None
     return False, None
 
@@ -573,44 +691,62 @@ def _extract_jsonrpc_init_outcome(text: str) -> tuple[bool, str | None]:
 
 
 def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is None:
-        if os.name == "posix":
+    if os.name == "posix":
+        # Always reclaim the entire session/process group even if the parent
+        # launcher already exited while descendants still hold stdio pipes.
+        pgid = proc.pid
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError:
+            pass
+        wait_deadline = time.monotonic() + 0.5
+        while time.monotonic() < wait_deadline:
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                break
             except OSError:
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
-        else:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+                break
+            time.sleep(0.02)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    elif proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
         try:
             proc.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
-            if os.name == "posix":
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
-            else:
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
             try:
-                proc.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
+                proc.kill()
+            except OSError:
                 pass
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _is_bare_command(cmd: str) -> bool:
+    if cmd.startswith("~"):
+        return False
+    if os.sep in cmd:
+        return False
+    if os.altsep and os.altsep in cmd:
+        return False
+    return True
 
 
 def _probe_stdio_mcp(
-    cfg: dict[str, Any], target_root: Path, timeout_sec: float
+    cfg: dict[str, Any],
+    target_root: Path,
+    timeout_sec: float,
+    *,
+    trust_project_mcp: bool = False,
 ) -> tuple[bool, str]:
     env = os.environ.copy()
     raw_env = cfg.get("env")
@@ -620,13 +756,24 @@ def _probe_stdio_mcp(
                 env[k] = v
 
     cmd = str(cfg["command"]).strip()
-    resolved_exe = shutil.which(cmd, path=env.get("PATH"))
-    if resolved_exe is None:
+    resolved_path: Path | None = None
+    if _is_bare_command(cmd):
+        found_bin = shutil.which(cmd, path=env.get("PATH"))
+        if found_bin is not None:
+            resolved_path = Path(found_bin).resolve()
+    else:
         candidate = _expand_path(cmd, target_root)
         if candidate.is_file():
-            resolved_exe = str(candidate)
-    if resolved_exe is None:
+            resolved_path = candidate.resolve()
+
+    if resolved_path is None:
         return False, f"executable not found: {cmd}"
+
+    if _is_within(resolved_path, target_root) and not trust_project_mcp:
+        return (
+            False,
+            f"stdio MCP executable {resolved_path} is inside target checkout; review it and pass --trust-project-mcp to execute",
+        )
 
     raw_args = [] if cfg.get("args") is None else cfg.get("args")
     if not isinstance(raw_args, list) or not all(isinstance(a, str) for a in raw_args):
@@ -644,7 +791,7 @@ def _probe_stdio_mcp(
         popen_kwargs["start_new_session"] = True
 
     try:
-        proc = subprocess.Popen([resolved_exe, *raw_args], **popen_kwargs)
+        proc = subprocess.Popen([str(resolved_path), *raw_args], **popen_kwargs)
     except OSError as exc:
         return False, f"failed to launch {cmd}: {exc}"
 
@@ -677,7 +824,11 @@ def _probe_stdio_mcp(
         ok, err_msg = _extract_jsonrpc_init_outcome(combined)
         if ok:
             return True, "stdio initialize ok"
-        return False, err_msg or f"timed out after {timeout_sec:.1f}s waiting for initialize response"
+        return (
+            False,
+            err_msg
+            or f"timed out after {timeout_sec:.1f}s waiting for initialize response",
+        )
 
     ok, err_msg = _extract_jsonrpc_init_outcome(stdout or "")
     if ok:
@@ -687,17 +838,6 @@ def _probe_stdio_mcp(
     detail = (stderr or "").strip().splitlines()
     hint = detail[0][:120] if detail else f"exit code {proc.returncode}"
     return False, f"no valid MCP initialize response ({hint})"
-
-
-def _origin_tuple(url: str) -> tuple[str, str, int]:
-    parsed = urllib_parse.urlparse(url)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or "").lower()
-    if parsed.port is not None:
-        port = parsed.port
-    else:
-        port = 443 if scheme == "https" else 80
-    return scheme, host, port
 
 
 class _UnsafeRedirectError(urllib_error.URLError):
@@ -793,27 +933,65 @@ def _set_resp_socket_timeout(resp: Any, remaining: float) -> None:
         pass
 
 
+def _read_resp_chunk(resp: Any, size: int, remaining: float) -> bytes:
+    _set_resp_socket_timeout(resp, remaining)
+    read1 = getattr(resp, "read1", None)
+    if callable(read1):
+        return bytes(read1(size))
+    return bytes(resp.read(size))
+
+
+def _read_http_body_bounded(
+    resp: Any, deadline: float, *, max_bytes: int = _HTTP_MAX_BODY_BYTES
+) -> tuple[str | None, str | None]:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, "timed out reading HTTP response body"
+        to_read = min(4096, max_bytes - total + 1)
+        try:
+            chunk = _read_resp_chunk(resp, to_read, remaining)
+        except (TimeoutError, OSError) as exc:
+            return None, f"HTTP read failed: {exc}"
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            return None, f"HTTP response exceeded {max_bytes} byte limit"
+        chunks.append(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace"), None
+
+
 def _read_sse_events(
     resp: Any,
     deadline: float,
     *,
     expect_event: str | None = None,
+    max_event_bytes: int = _SSE_MAX_EVENT_BYTES,
+    max_total_bytes: int = _SSE_MAX_TOTAL_BYTES,
+    carry_buf: bytearray | None = None,
 ) -> tuple[str | None, tuple[bool, str | None] | None, str | None]:
-    """Incrementally read SSE events until either `expect_event` or a JSON-RPC init result arrives.
+    """Incrementally read SSE events within overall `deadline` and size caps.
 
     Returns (endpoint_data, init_outcome, error_reason).
     """
+    buf = carry_buf if carry_buf is not None else bytearray()
     current_event: str | None = None
     data_lines: list[str] = []
+    event_bytes = 0
+    total_bytes = 0
 
     def _dispatch() -> tuple[str | None, tuple[bool, str | None] | None]:
-        nonlocal current_event, data_lines
+        nonlocal current_event, data_lines, event_bytes
         if not data_lines and current_event is None:
             return None, None
         ev_type = (current_event or "message").strip()
         payload = "\n".join(data_lines).strip()
         current_event = None
         data_lines = []
+        event_bytes = 0
         if expect_event is not None and ev_type == expect_event and payload:
             return payload, None
         if payload:
@@ -822,28 +1000,18 @@ def _read_sse_events(
                 return None, (ok, err_msg)
         return None, None
 
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None, None, "timed out reading SSE stream"
-        _set_resp_socket_timeout(resp, remaining)
-        try:
-            raw_line = resp.readline(65536)
-        except (TimeoutError, OSError) as exc:
-            return None, None, f"SSE read failed: {exc}"
-        if not raw_line:
-            ep, init_res = _dispatch()
-            if ep is not None or init_res is not None:
-                return ep, init_res, None
-            return None, None, "SSE stream closed before expected event arrived"
-        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+    def _process_line(
+        line: str,
+    ) -> tuple[str | None, tuple[bool, str | None] | None, str | None]:
+        nonlocal current_event, event_bytes
         if line == "":
             ep, init_res = _dispatch()
-            if ep is not None or init_res is not None:
-                return ep, init_res, None
-            continue
+            return ep, init_res, None
         if line.startswith(":"):
-            continue
+            return None, None, None
+        event_bytes += len(line.encode("utf-8"))
+        if event_bytes > max_event_bytes:
+            return None, None, f"SSE event exceeded {max_event_bytes} byte limit"
         if line.startswith("event:"):
             current_event = line[6:].strip()
         elif line.startswith("data:"):
@@ -851,18 +1019,63 @@ def _read_sse_events(
             if val.startswith(" "):
                 val = val[1:]
             data_lines.append(val)
+        return None, None, None
+
+    while True:
+        while True:
+            nl_idx = buf.find(b"\n")
+            if nl_idx == -1:
+                break
+            raw_line = bytes(buf[:nl_idx])
+            del buf[: nl_idx + 1]
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
+            ep, init_res, cap_err = _process_line(line)
+            if cap_err is not None:
+                return None, None, cap_err
+            if ep is not None or init_res is not None:
+                return ep, init_res, None
+
+        if len(buf) > max_event_bytes:
+            return None, None, f"SSE line exceeded {max_event_bytes} byte limit"
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, None, "timed out reading SSE stream"
+        try:
+            chunk = _read_resp_chunk(resp, 4096, remaining)
+        except (TimeoutError, OSError) as exc:
+            return None, None, f"SSE read failed: {exc}"
+        if not chunk:
+            if buf:
+                tail = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                buf.clear()
+                ep, init_res, cap_err = _process_line(tail)
+                if cap_err is not None:
+                    return None, None, cap_err
+                if ep is not None or init_res is not None:
+                    return ep, init_res, None
+            ep, init_res = _dispatch()
+            if ep is not None or init_res is not None:
+                return ep, init_res, None
+            return None, None, "SSE stream closed before expected event arrived"
+        total_bytes += len(chunk)
+        if total_bytes > max_total_bytes:
+            return None, None, f"SSE stream exceeded {max_total_bytes} byte limit"
+        buf.extend(chunk)
 
 
 def _probe_legacy_sse_mcp(
     url: str,
     opener: urllib_request.OpenerDirector,
     base_headers: dict[str, str],
+    sensitive_headers: set[str],
     deadline: float,
 ) -> tuple[bool, str]:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return False, "timed out before legacy SSE handshake"
 
+    initial_origin = _origin_tuple(url)
     get_headers = {
         k: v for k, v in base_headers.items() if k.lower() != "content-type"
     }
@@ -890,8 +1103,9 @@ def _probe_legacy_sse_mcp(
                 f"GET fallback returned {ctype or 'unknown content-type'} instead of text/event-stream",
             )
         final_sse_url = resp.geturl() if hasattr(resp, "geturl") else url
+        sse_carry = bytearray()
         endpoint_raw, _, sse_err = _read_sse_events(
-            resp, deadline, expect_event="endpoint"
+            resp, deadline, expect_event="endpoint", carry_buf=sse_carry
         )
         if endpoint_raw is None:
             return False, sse_err or "legacy SSE stream did not emit an endpoint event"
@@ -906,7 +1120,15 @@ def _probe_legacy_sse_mcp(
         post_rem = deadline - time.monotonic()
         if post_rem <= 0:
             return False, "timed out before legacy SSE initialize POST"
-        post_headers = dict(base_headers)
+        # Never restore auth/configured sensitive headers if GET redirected away from initial_origin.
+        if _origin_tuple(msg_url) == initial_origin:
+            post_headers = dict(base_headers)
+        else:
+            post_headers = {
+                k: v
+                for k, v in base_headers.items()
+                if k.lower() not in sensitive_headers
+            }
         post_headers["Content-Type"] = "application/json"
         post_headers["Accept"] = "application/json, text/event-stream"
         msg_req = urllib_request.Request(
@@ -920,8 +1142,10 @@ def _probe_legacy_sse_mcp(
                 msg_status = getattr(msg_resp, "status", 200)
                 msg_ctype = (msg_resp.headers.get("Content-Type") or "").lower()
                 if msg_status == 200 and "application/json" in msg_ctype:
-                    body = msg_resp.read(262144).decode("utf-8", errors="replace")
-                    ok, err_msg = _extract_jsonrpc_init_outcome(body)
+                    body, body_err = _read_http_body_bounded(msg_resp, deadline)
+                    if body_err is not None:
+                        return False, body_err
+                    ok, err_msg = _extract_jsonrpc_init_outcome(body or "")
                     if ok:
                         return True, "legacy sse initialize ok"
                     if err_msg:
@@ -937,7 +1161,9 @@ def _probe_legacy_sse_mcp(
         except (urllib_error.URLError, TimeoutError, OSError) as exc:
             return False, f"legacy SSE message endpoint unreachable: {exc}"
 
-        _, init_res, wait_err = _read_sse_events(resp, deadline)
+        _, init_res, wait_err = _read_sse_events(
+            resp, deadline, carry_buf=sse_carry
+        )
         if init_res is not None:
             ok, err_msg = init_res
             if ok:
@@ -988,9 +1214,10 @@ def _probe_http_mcp(cfg: dict[str, Any], timeout_sec: float) -> tuple[bool, str]
                         return True, f"http sse initialize ok (HTTP {status})"
                     return False, err_msg or "http sse initialize failed"
                 return False, sse_err or "SSE stream did not return MCP initialize result"
-            _set_resp_socket_timeout(resp, max(0.1, deadline - time.monotonic()))
-            body = resp.read(262144).decode("utf-8", errors="replace")
-            ok, err_msg = _extract_jsonrpc_init_outcome(body)
+            body, body_err = _read_http_body_bounded(resp, deadline)
+            if body_err is not None:
+                return False, body_err
+            ok, err_msg = _extract_jsonrpc_init_outcome(body or "")
             if ok:
                 return True, f"http initialize ok (HTTP {status})"
             if err_msg:
@@ -1001,8 +1228,10 @@ def _probe_http_mcp(cfg: dict[str, Any], timeout_sec: float) -> tuple[bool, str]
         exc.close()
         if code in (401, 403):
             return False, f"authentication required (HTTP {code})"
-        if code == 405:
-            return _probe_legacy_sse_mcp(url, opener, auth_headers, deadline)
+        if code in (400, 404, 405):
+            return _probe_legacy_sse_mcp(
+                url, opener, auth_headers, sensitive_headers, deadline
+            )
         return False, f"HTTP error {code}"
     except (urllib_error.URLError, TimeoutError, OSError) as exc:
         return False, f"unreachable: {exc}"
@@ -1028,10 +1257,27 @@ def _probe_mcp_entry(
                 False,
                 f"untrusted project-scoped stdio MCP command in {entry.source}; review it and pass --trust-project-mcp to execute",
             )
-        return _probe_stdio_mcp(entry.cfg, target_root, timeout_sec)
+        return _probe_stdio_mcp(
+            entry.cfg,
+            target_root,
+            timeout_sec,
+            trust_project_mcp=trust_project_mcp,
+        )
     if _is_non_empty_str(entry.cfg.get("url")) or _is_non_empty_str(
         entry.cfg.get("serverUrl")
     ):
+        has_auth = _cfg_has_auth(entry.cfg)
+        if has_auth and not trust_project_mcp:
+            if entry.inherited_auth_origin_mismatch:
+                return (
+                    False,
+                    f"project-scoped MCP config ({entry.source}) overrode URL origin for a server inheriting user credentials; review it and pass --trust-project-mcp to probe",
+                )
+            if not entry.auth_trusted or not entry.trusted_origin:
+                return (
+                    False,
+                    f"untrusted project-scoped HTTP MCP auth/header config in {entry.source}; review it and pass --trust-project-mcp to probe",
+                )
         return _probe_http_mcp(entry.cfg, timeout_sec)
     return False, "no command or url configured"
 
@@ -1041,7 +1287,12 @@ def probe_mcp_server(
 ) -> tuple[bool, str]:
     """Perform a live connectivity/handshake probe for one configured MCP server."""
     return _probe_mcp_entry(
-        _McpEntry(source="<inline>", cfg=cfg, trusted_origin=True),
+        _McpEntry(
+            source="<inline>",
+            cfg=cfg,
+            trusted_origin=True,
+            auth_trusted=True,
+        ),
         target_root,
         timeout_sec=timeout_sec,
         trust_project_mcp=True,
@@ -1200,16 +1451,22 @@ def evaluate_harness_requirements(
             "restore a valid harnesses/pstack.toml with [skills].core in the nursery"
         )
     if missing_skills or missing_core_skills:
+        scoped_skill_dirs = _dedupe(
+            [
+                ADAPTER_REPO_SKILL_DIR[a]
+                for a in (adapters or ())
+                if a in ADAPTER_REPO_SKILL_DIR
+            ]
+        ) or (".agents/skills",)
+        repo_skill_hint = " or ".join(f"{d}/<name>/SKILL.md" for d in scoped_skill_dirs)
         upstream = manifest.get("upstream") if isinstance(manifest, dict) else None
         pinned_ref = manifest.get("pinned_ref") if isinstance(manifest, dict) else None
         if upstream and pinned_ref:
             hints.append(
-                f"run `garden harness sync-pstack --apply` (from {upstream} ref {str(pinned_ref)[:12]}) or place custom SKILL.md under .agents/skills/<name>/ or ~/.agents/skills/<name>/"
+                f"run `garden harness sync-pstack --apply` (from {upstream} ref {str(pinned_ref)[:12]}) or place custom skill definitions under {repo_skill_hint}"
             )
         else:
-            hints.append(
-                "place required skill definitions under .agents/skills/<name>/SKILL.md or ~/.agents/skills/<name>/SKILL.md"
-            )
+            hints.append(f"place required skill definitions under {repo_skill_hint}")
     if missing_mcp or mcp_probe_errors:
         scoped = _dedupe([a for a in (adapters or ()) if a in ADAPTER_MCP_HINTS])
         if scoped:

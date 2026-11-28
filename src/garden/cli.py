@@ -160,6 +160,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="verify target's approved [common_harness].ref on this branch matches nursery pinned_ref",
     )
+    har_sync.add_argument(
+        "--flow",
+        default=None,
+        help="flow name (or 'auto') to scope --adapter auto to the executed flow's adapters",
+    )
+    har_sync.add_argument("--trigger-event", default="manual")
+    har_sync.add_argument("--trigger-action", default=None)
+    har_sync.add_argument("--trigger-label", default=None)
     har_sync.add_argument("--source", default=None)
     har_sync.add_argument("--apply", action="store_true")
     har_sync.add_argument(
@@ -386,6 +394,10 @@ def main(argv: list[str] | None = None) -> int:
                     dest=args.dest,
                     target_root=args.target,
                     approval_branch=args.approval_branch,
+                    flow=args.flow,
+                    trigger_event=args.trigger_event,
+                    trigger_action=args.trigger_action,
+                    trigger_label=args.trigger_label,
                     source=args.source,
                     apply=args.apply,
                     force=args.force,

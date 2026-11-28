@@ -24,7 +24,7 @@ garden doctor --target . --strict-harness --probe-mcp --trust-project-mcp
 garden harness guide --target . --adapter all
 ```
 
-`--skip-network` は GitHub のブランチ保護 API 確認だけを省略するオプションであり、`--probe-mcp` の HTTP/SSE 疎通確認は無効化しません。また、プロジェクト内設定ファイル由来の stdio MCP コマンドはセキュリティのため既定では起動せず、内容確認後に `--trust-project-mcp` を明示したときだけ実行します。特定のアダプターだけを確認したいときは `--adapter antigravity|cursor|claude|codex` を指定します。
+`--skip-network` は GitHub のブランチ保護 API 確認だけを省略するオプションであり、`--probe-mcp` の HTTP/SSE 疎通確認は無効化しません。また、プロジェクト内設定ファイル由来の stdio コマンド・チェックアウト内実行ファイル・認証設定付き HTTP プローブはセキュリティのため既定では実行せず、内容確認後に `--trust-project-mcp` を明示したときだけ実行します。特定のアダプターだけを確認したいときは `--adapter antigravity|cursor|claude|codex` を指定します。
 
 ---
 
@@ -41,10 +41,11 @@ garden harness sync-pstack --adapter antigravity --apply   # ~/.gemini/config/pl
 garden harness sync-pstack --adapter cursor --apply        # ~/.cursor/plugins/pstack（プラグイン構成）
 garden harness sync-pstack --adapter codex --apply         # ~/.agents/skills（スキル展開・既存スキル保持）
 garden harness sync-pstack --adapter claude --apply        # ~/.claude/skills（スキル展開・既存スキル保持）
-garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/skills（対象リポジトリ同梱）
+garden harness sync-pstack --adapter repo --target . --apply         # <repo>/.agents/skills（Codex / Antigravity 向け同梱）
+garden harness sync-pstack --adapter claude-repo --target . --apply  # <repo>/.claude/skills（Claude Code 向け同梱）
 ```
 
-`sync-pstack --apply` は取得したコミットが `pinned_ref` と完全一致すること、および `[skills].core` の全スキルに `SKILL.md` があることを確認してから配置先を更新します。配置先や対象スキルがシンボリックリンクの場合は参照先を破壊しないよう拒否し、共有スキルディレクトリ（`codex` / `claude` / `repo`）では全スキルをステージ検証してから置換します（管理外の既存同名スキルは `--force` なしでは上書きしません）。`--approval-branch main` を付けると、対象リポジトリの承認済み `[common_harness].ref` と `pinned_ref` の一致も事前に照合します。
+`sync-pstack --apply` は取得したコミットが `pinned_ref` と完全一致すること、および `[skills].core` の全スキルに `SKILL.md` があることを確認してから、全同期先を事前検査・ステージングしたうえで一括置換します。配置先や対象スキルがシンボリックリンクの場合は参照先を破壊しないよう拒否し、管理外の既存同名スキルは `--force` なしでは上書きしません（中断や復元失敗時は旧バックアップを削除せず保護します）。`--approval-branch main` と `--flow <flow>` を付けると、承認済み `[common_harness].ref` の照合と実行フローのアダプター限定同期を行います。なお、相対パスの `--dest` は呼び出し元のカレントディレクトリ基準で解決します。
 
 ---
 
@@ -62,7 +63,7 @@ garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/s
 - サーバー設定はオブジェクトであり、空でない文字列の `command`・`url`・`serverUrl` のいずれかが必要です（`null` や空オブジェクトは未設定扱い）。
 - 上位設定に `disabled = true` / `enabled = false` / `disabledMcpjsonServers` があるサーバーは無効化済み（不足）として扱われます。
 - 実エージェントを使うフローでは、そのフローで選択したアダプター（例: `codex`）に適用される MCP 設定だけを参照します。
-- `garden doctor --probe-mcp` を指定すると、stdio サーバーには MCP `initialize`（JSON-RPC 2.0）を送信し、HTTP/SSE サーバーには `initialize` POST（405 時は旧 HTTP+SSE の `endpoint` イベント経由で `initialize`）を送信して実接続と応答を検証します。Codex の `bearer_token_env_var` / `http_headers` / `env_http_headers` も反映し、別オリジンや HTTP ダウングレードへのリダイレクト時は認証ヘッダーを転送しません。
+- `garden doctor --probe-mcp` を指定すると、stdio サーバーには MCP `initialize`（JSON-RPC 2.0）を送信し、HTTP/SSE サーバーには `initialize` POST（400 / 404 / 405 時は旧 HTTP+SSE の `endpoint` イベント経由で `initialize`）を送信して、`protocolVersion`・`capabilities`・`serverInfo.name` を含む応答を検証します。Codex の `bearer_token_env_var` / `http_headers` / `env_http_headers` も反映し、別オリジンや HTTP ダウングレードへのリダイレクト時は認証ヘッダーを転送・復元しません。
 
 ---
 
@@ -77,7 +78,7 @@ garden harness sync-pstack --adapter repo --target . --apply  # <repo>/.agents/s
 | `http-api` | `create-verification-skill`, `maintain-verification-skill` | なし | 実サーバー起動またはテストクライアントで正常・異常ステータスとデータ変化を検証 |
 | `library` | `create-verification-skill`, `maintain-verification-skill` | なし | 公開 API 契約・型定義・後方互換性を利用者視点のインポート試験で検証 |
 
-対象固有のスキルを追加したい場合は、対象リポジトリの `.agents/skills/<スキル名>/SKILL.md` を作成してコミットし、`.garden/garden.toml` の `[target_harness].required_skills` へ追記します。`garden run` は実行用ワークツリー（対象コミットのスナップショット）上で要件を検査するため、コミット済みのスキルと設定がそのまま CI でも再現されます。
+対象固有のスキルを追加したい場合は、対象リポジトリの `.agents/skills/<スキル名>/SKILL.md`（Claude Code を利用する場合は `.claude/skills/<スキル名>/SKILL.md`）を作成してコミットし、`.garden/garden.toml` の `[target_harness].required_skills` へ追記します。`garden run` は実行用ワークツリー（対象コミットのスナップショット）上で要件を検査するため、コミット済みのスキルと設定がそのまま CI でも再現されます。
 
 ---
 

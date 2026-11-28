@@ -144,13 +144,23 @@ jobs:
         if: inputs.sync_pstack
         env:
           APPROVAL_BRANCH: ${{ inputs.approval_branch }}
+          FLOW_NAME: ${{ inputs.flow }}
+          TRIGGER_ACTION: ${{ github.event.action }}
         run: |
-          python3 "${RUNNER_TEMP}/garden-nursery/garden.py" harness sync-pstack \
-            --adapter auto \
-            --target . \
-            --approval-branch "${APPROVAL_BRANCH}" \
-            --apply \
+          SYNC_ARGS=(
+            python3 "${RUNNER_TEMP}/garden-nursery/garden.py" harness sync-pstack
+            --adapter auto
+            --target .
+            --approval-branch "${APPROVAL_BRANCH}"
+            --flow "${FLOW_NAME}"
+            --trigger-event "${GITHUB_EVENT_NAME}"
+            --apply
             --json
+          )
+          if [ -n "${TRIGGER_ACTION}" ]; then
+            SYNC_ARGS+=(--trigger-action "${TRIGGER_ACTION}")
+          fi
+          "${SYNC_ARGS[@]}"
 
       - name: Mark Issue / PR as garden:running
         if: inputs.issue_number != 0
