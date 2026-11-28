@@ -9,7 +9,7 @@ This skill runs a bounded exhaustive verifier directly against the real Python p
 
 ## Covered code & sync record
 
-- **Last verified sync commit:** `57a15aa`
+- **Last verified sync commit:** `b81fc5d`
 - **Covered files and functions:**
   - `src/garden/engine.py`: `run_flow`, `_evaluate_criteria`, `_apply_effective_delegation`, `VERDICT_EXIT_CODES`
   - `src/garden/artifacts.py`: `resolve_report_kind`
@@ -20,7 +20,7 @@ This skill runs a bounded exhaustive verifier directly against the real Python p
 Check whether your change touches covered code before deciding to skip:
 
 ```sh
-git diff --name-only 57a15aa -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
+git diff --name-only b81fc5d -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
 ```
 
 If that command outputs any file, you **must** run the verifier below and confirm whether the verifier still matches the code at your new commit.
