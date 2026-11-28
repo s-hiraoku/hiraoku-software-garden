@@ -12,6 +12,13 @@ name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
 
+[standard_harness]
+common_required_skills = ["create-verification-skill", "maintain-verification-skill"]
+target_required_skills = []
+target_required_mcp = []
+recommended_checks = ["api_contract", "typecheck", "error_status_and_persistence"]
+notes = "HTTP API は実サーバー起動またはテストクライアントで正常・異常ステータスとデータ変化を検証する。"
+
 [defaults.delegation]
 mode = "observe_only"
 allowed_paths = []

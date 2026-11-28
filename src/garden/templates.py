@@ -194,6 +194,7 @@ def init_garden(
     version: int | None = None,
     force: bool = False,
     nursery_ref: str = "main",
+    with_standard_harness: bool = False,
     nursery_root: Path | None = None,
 ) -> dict[str, Any]:
     _validate_nursery_ref(nursery_ref)
@@ -224,6 +225,23 @@ def init_garden(
     pstack_ref = (meta.get("common_harness") or {}).get(
         "ref", "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
     )
+    std_harness = meta.get("standard_harness") or {}
+    common_req_skills = (
+        list(std_harness.get("common_required_skills") or [])
+        if with_standard_harness
+        else []
+    )
+    target_req_skills = (
+        list(std_harness.get("target_required_skills") or [])
+        if with_standard_harness
+        else []
+    )
+    target_req_mcp = (
+        list(std_harness.get("target_required_mcp") or [])
+        if with_standard_harness
+        else []
+    )
+
     repo_name = target.name
     spec_id = _slugify(repo_name)
 
@@ -231,6 +249,9 @@ def init_garden(
         "repo_name": repo_name,
         "spec_id": spec_id,
         "pstack_ref": pstack_ref,
+        "common_required_skills": json.dumps(common_req_skills, ensure_ascii=False),
+        "target_required_skills": json.dumps(target_req_skills, ensure_ascii=False),
+        "target_required_mcp": json.dumps(target_req_mcp, ensure_ascii=False),
     }
 
     planned_files: list[tuple[Path, str]] = [
@@ -272,6 +293,7 @@ def init_garden(
         "template": template_type,
         "version": version,
         "nursery_ref": nursery_ref,
+        "with_standard_harness": with_standard_harness,
         "detection_reasons": list(detected_reasons),
         "created_files": created,
     }

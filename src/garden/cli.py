@@ -21,6 +21,13 @@ from garden.feedback import (
 )
 from garden.fleet import collect_fleet_status
 from garden.git_utils import GitError
+from garden.harness_setup import (
+    GUIDE_ADAPTERS,
+    PSTACK_SYNC_ADAPTERS,
+    build_harness_guide,
+    format_harness_guide_markdown,
+    sync_pstack,
+)
 from garden.metrics import collect_garden_metrics
 from garden.publish import reflect_run
 from garden.release_gate import run_template_release_gate
@@ -80,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="main",
         help="Nursery Git ref (branch, tag, or commit SHA) to pin in generated workflow",
     )
+    init_cmd.add_argument(
+        "--with-standard-harness",
+        action="store_true",
+        help="populate template standard required_skills and required_mcp into .garden/garden.toml",
+    )
     init_cmd.add_argument("--force", action="store_true")
 
     doc_cmd = commands.add_parser("doctor", help="diagnose a target repository Garden setup")
@@ -92,6 +104,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="require pstack core skills even for observe_only definitions without real agent steps",
     )
+    doc_cmd.add_argument(
+        "--probe-mcp",
+        action="store_true",
+        help="perform live connectivity/initialize probes against configured required MCP servers",
+    )
+
+    har_cmd = commands.add_parser(
+        "harness",
+        help="inspect harness setup guidance or synchronize pinned pstack",
+    )
+    har_sub = har_cmd.add_subparsers(dest="harness_action", required=True)
+
+    har_guide = har_sub.add_parser(
+        "guide",
+        help="show environment-specific setup instructions and template standard harness gaps",
+    )
+    har_guide.add_argument("--target", type=Path, default=Path.cwd())
+    har_guide.add_argument(
+        "--adapter",
+        choices=("all", *GUIDE_ADAPTERS),
+        default="all",
+    )
+    har_guide.add_argument("--strict-harness", action="store_true")
+    har_guide.add_argument("--probe-mcp", action="store_true")
+    har_guide.add_argument("--json", action="store_true", dest="as_json")
+
+    har_sync = har_sub.add_parser(
+        "sync-pstack",
+        help="plan or apply pinned pstack synchronization from harnesses/pstack.toml (dry-run by default)",
+    )
+    har_sync.add_argument(
+        "--adapter",
+        choices=tuple(sorted(PSTACK_SYNC_ADAPTERS)),
+        default="antigravity",
+    )
+    har_sync.add_argument("--dest", type=Path, default=None)
+    har_sync.add_argument("--target", type=Path, default=Path.cwd())
+    har_sync.add_argument("--source", default=None)
+    har_sync.add_argument("--apply", action="store_true")
+    har_sync.add_argument("--json", action="store_true", dest="as_json")
 
     upg_cmd = commands.add_parser("upgrade", help="plan or apply a template upgrade safely")
     upg_cmd.add_argument("--target", type=Path, default=Path.cwd())
@@ -258,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
                 template_type=args.template_type,
                 version=args.version,
                 nursery_ref=args.nursery_ref,
+                with_standard_harness=args.with_standard_harness,
                 force=args.force,
             )
         except (OSError, ValueError) as error:
@@ -272,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
             skip_network=args.skip_network,
             approval_branch=args.approval_branch,
             strict_harness=args.strict_harness,
+            probe_mcp=args.probe_mcp,
         )
         if args.as_json:
             print(
@@ -285,6 +339,46 @@ def main(argv: list[str] | None = None) -> int:
             for item in items:
                 print(f"[{item.status.upper():5}] {item.id}: {item.detail}")
         return code
+
+    if args.action == "harness":
+        try:
+            if args.harness_action == "guide":
+                guide = build_harness_guide(
+                    args.target,
+                    adapter=args.adapter,
+                    strict_harness=args.strict_harness,
+                    probe_mcp=args.probe_mcp,
+                )
+                if args.as_json:
+                    print(json.dumps(guide, ensure_ascii=False, indent=2))
+                else:
+                    print(format_harness_guide_markdown(guide))
+                return 0 if guide["status"]["ok"] else 1
+            if args.harness_action == "sync-pstack":
+                synced = sync_pstack(
+                    adapter=args.adapter,
+                    dest=args.dest,
+                    target_root=args.target,
+                    source=args.source,
+                    apply=args.apply,
+                )
+                if args.as_json:
+                    print(json.dumps(synced, ensure_ascii=False, indent=2))
+                else:
+                    mode = "APPLIED" if synced["applied"] else "DRY-RUN"
+                    print(
+                        f"[{mode}] pstack@{synced['pinned_ref'][:12]} -> {synced['dest']} "
+                        f"(adapter={synced['adapter']}, layout={synced['layout']})"
+                    )
+                    if not synced["applied"]:
+                        print("Pass --apply to fetch and install the pinned pstack revision.")
+                return 0
+        except (OSError, ValueError, DefinitionError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
 
     if args.action == "upgrade":
         try:

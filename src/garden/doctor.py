@@ -96,6 +96,7 @@ def run_doctor(
     skip_network: bool = False,
     approval_branch: str = "main",
     strict_harness: bool = False,
+    probe_mcp: bool = False,
 ) -> tuple[int, list[DiagnosticItem]]:
     """Run all diagnostic checks. Returns (exit_code, items)."""
     items: list[DiagnosticItem] = []
@@ -254,6 +255,7 @@ def run_doctor(
         enforce_core=enforce_core,
         include_advisory_core=True,
         adapters=real_adapters,
+        probe_mcp=probe_mcp,
     )
     hint_suffix = (
         f" ({'; '.join(harness_eval.remedy_hints)})"
@@ -316,20 +318,32 @@ def run_doctor(
             )
         )
 
-    if harness_eval.missing_mcp:
+    if harness_eval.missing_mcp or harness_eval.mcp_probe_errors:
+        mcp_problems: list[str] = []
+        if harness_eval.missing_mcp:
+            mcp_problems.append(
+                f"missing required MCP server(s): {', '.join(harness_eval.missing_mcp)}"
+            )
+        if harness_eval.mcp_probe_errors:
+            probe_desc = ", ".join(
+                f"{name} ({reason})"
+                for name, reason in sorted(harness_eval.mcp_probe_errors.items())
+            )
+            mcp_problems.append(f"MCP probe failed: {probe_desc}")
         items.append(
             DiagnosticItem(
                 id="required_mcp",
                 status="error",
-                detail=f"missing required MCP server(s): {', '.join(harness_eval.missing_mcp)}{hint_suffix}",
+                detail=f"{'; '.join(mcp_problems)}{hint_suffix}",
             )
         )
     elif harness_eval.required_mcp:
+        mode_note = " and probed" if probe_mcp else " (config check)"
         items.append(
             DiagnosticItem(
                 id="required_mcp",
                 status="ok",
-                detail=f"all {len(harness_eval.required_mcp)} required MCP server(s) configured",
+                detail=f"all {len(harness_eval.required_mcp)} required MCP server(s) configured{mode_note}",
             )
         )
     else:

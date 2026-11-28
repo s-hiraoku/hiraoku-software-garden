@@ -13,6 +13,13 @@ name = "pstack"
 ref = "7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9"
 recommended_skills = ["create-verification-skill", "maintain-verification-skill"]
 
+[standard_harness]
+common_required_skills = ["create-verification-skill", "maintain-verification-skill"]
+target_required_skills = []
+target_required_mcp = []
+recommended_checks = ["public_api", "type_and_compat"]
+notes = "ライブラリは公開 API 契約・型定義・後方互換性を利用者視点のインポート試験で検証する。"
+
 [defaults.delegation]
 mode = "observe_only"
 allowed_paths = []

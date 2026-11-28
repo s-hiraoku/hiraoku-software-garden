@@ -101,14 +101,17 @@ class WorkflowYamlTests(unittest.TestCase):
         )
         self.assertIn("node_version:", text)
         self.assertIn("node_version_file:", text)
+        self.assertIn("sync_pstack:", text)
+        self.assertIn("harness sync-pstack", text)
         self.assertIn("uses: actions/setup-node@v4", text)
         self.assertIn("node-version: ${{ inputs.node_version }}", text)
         self.assertIn("node-version-file: ${{ inputs.node_version_file }}", text)
         self.assertIn("npm@*|pnpm@*", text)
         self.assertIn("--mark-running", text)
         self.assertIn("--clear-running", text)
-        # Node setup and running-label mark must run before the Garden flow
+        # Node setup, optional pstack sync, and running-label mark must run before the Garden flow
         self.assertLess(text.index("actions/setup-node@v4"), text.index("- name: Run Garden flow"))
+        self.assertLess(text.index("harness sync-pstack"), text.index("- name: Run Garden flow"))
         self.assertLess(text.index("--mark-running"), text.index("- name: Run Garden flow"))
         self.assertLess(text.index("- name: Post report to GitHub Issue / PR"), text.index("--clear-running"))
 

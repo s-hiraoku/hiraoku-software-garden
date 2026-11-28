@@ -8,10 +8,13 @@ version = 1
 name = "pstack"
 ref = "{pstack_ref}"
 skills = ["create-verification-skill", "maintain-verification-skill"]
+required_skills = {common_required_skills}
 
 [target_harness]
 name = "{repo_name}-api-harness"
 version = 1
+required_skills = {target_required_skills}
+required_mcp = {target_required_mcp}
 
 [spec]
 paths = ["docs/specs/{spec_id}.md"]
