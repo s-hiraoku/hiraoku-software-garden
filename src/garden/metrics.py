@@ -43,6 +43,7 @@ def collect_garden_metrics(
     total_retries = 0
     total_duration = 0.0
     total_cost = 0.0
+    unknown_cost_runs = 0
 
     for run in window_runs:
         verdict = str(run.get("verdict") or "UNKNOWN")
@@ -50,7 +51,12 @@ def collect_garden_metrics(
         total_retries += int(run.get("retries_used") or 0)
         total_duration += float(run.get("duration_sec") or 0.0)
         usage = run.get("usage") or {}
-        total_cost += float(usage.get("cost_usd") or 0.0)
+        if usage.get("cost_unknown") or ("cost_usd" in usage and usage.get("cost_usd") is None):
+            unknown_cost_runs += 1
+            if usage.get("cost_known_usd") is not None:
+                total_cost += float(usage.get("cost_known_usd") or 0.0)
+        else:
+            total_cost += float(usage.get("cost_usd") or 0.0)
 
         esc = run.get("escalation")
         if isinstance(esc, dict) and esc.get("reason"):
@@ -103,6 +109,7 @@ def collect_garden_metrics(
         "total_retries": total_retries,
         "avg_duration_sec": round(total_duration / n, 3) if n else 0.0,
         "total_cost_usd": round(total_cost, 4),
+        "unknown_cost_runs": unknown_cost_runs,
         "escalation_reasons": dict(escalation_reasons),
         "criteria_non_satisfied_counts": dict(criteria_non_satisfied),
         "recurring_failure_criteria": sorted(

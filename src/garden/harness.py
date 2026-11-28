@@ -24,7 +24,9 @@ DEFAULT_EXTRA_SKILL_DIRS: tuple[str, ...] = (
     ".agents/skills",
     ".cursor/skills",
     ".claude/skills",
+    ".gemini/skills",
     "~/.agents/skills",
+    "~/.gemini/skills",
     "~/.gemini/config/skills",
     "~/.cursor/skills",
     "~/.claude/skills",
@@ -39,6 +41,12 @@ ADAPTER_SKILL_DIRS: dict[str, tuple[str, ...]] = {
     "claude": (
         ".claude/skills",
         "~/.claude/skills",
+    ),
+    "gemini": (
+        ".agents/skills",
+        ".gemini/skills",
+        "~/.agents/skills",
+        "~/.gemini/skills",
     ),
     "antigravity": (
         ".agents/skills",
@@ -56,6 +64,7 @@ ADAPTER_SKILL_DIRS: dict[str, tuple[str, ...]] = {
 ADAPTER_REPO_SKILL_DIR: dict[str, str] = {
     "codex": ".agents/skills",
     "claude": ".claude/skills",
+    "gemini": ".agents/skills",
     "antigravity": ".agents/skills",
     "cursor": ".cursor/skills",
 }
@@ -74,6 +83,10 @@ ADAPTER_MCP_PROFILES: dict[str, tuple[tuple[str, str, bool], ...]] = {
         (".mcp.json", "json", False),
         ("~/.claude.json", "claude_json_project", True),
     ),
+    "gemini": (
+        ("~/.gemini/settings.json", "gemini_settings", True),
+        (".gemini/settings.json", "gemini_settings", False),
+    ),
     "antigravity": (
         ("~/.gemini/antigravity/mcp", "schema_dir", True),
         ("~/.gemini/config/mcp_config.json", "json", True),
@@ -89,6 +102,7 @@ ADAPTER_MCP_PROFILES: dict[str, tuple[tuple[str, str, bool], ...]] = {
 ADAPTER_MCP_HINTS: dict[str, str] = {
     "codex": ".codex/config.toml or ~/.codex/config.toml",
     "claude": ".mcp.json or ~/.claude.json",
+    "gemini": ".gemini/settings.json or ~/.gemini/settings.json",
     "antigravity": ".mcp.json, ~/.gemini/antigravity/mcp_config.json, or ~/.gemini/config/mcp_config.json",
     "cursor": ".cursor/mcp.json or ~/.cursor/mcp.json",
 }
@@ -191,7 +205,7 @@ def _origin_tuple(url: str) -> tuple[str, str, int]:
 def _cfg_url(cfg: dict[str, Any] | None) -> str | None:
     if not isinstance(cfg, dict):
         return None
-    for key in ("url", "serverUrl"):
+    for key in ("url", "serverUrl", "httpUrl"):
         val = cfg.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -264,6 +278,27 @@ def _skill_search_roots(
     return roots
 
 
+def _load_gemini_skill_policy(target_root: Path) -> tuple[bool, set[str]]:
+    """Return (skills_enabled, disabled_skill_names) from Gemini CLI user/workspace settings.json."""
+    skills_enabled = True
+    disabled: set[str] = set()
+    for raw_path in ("~/.gemini/settings.json", ".gemini/settings.json"):
+        data = _read_json_dict(_expand_path(raw_path, target_root))
+        if data is None:
+            continue
+        skills_tbl = data.get("skills")
+        if not isinstance(skills_tbl, dict):
+            continue
+        if isinstance(skills_tbl.get("enabled"), bool):
+            skills_enabled = skills_tbl["enabled"]
+        raw_disabled = skills_tbl.get("disabled")
+        if isinstance(raw_disabled, list):
+            for item in raw_disabled:
+                if isinstance(item, str) and item.strip():
+                    disabled.add(item.strip())
+    return skills_enabled, disabled
+
+
 def discover_installed_skills(
     target_root: Path,
     manifest: dict[str, Any] | None = None,
@@ -273,8 +308,9 @@ def discover_installed_skills(
     """Scan configured skill directories and return {skill_name: SKILL.md path}.
 
     When `adapters` includes profile-specific real adapters (codex, claude,
-    antigravity, cursor) and `GARDEN_SKILL_PATHS` is not set, a skill is
-    returned only if it is discoverable by all selected adapters.
+    gemini, antigravity, cursor) and `GARDEN_SKILL_PATHS` is not set, a skill
+    is returned only if it is discoverable (and not disabled) by all selected
+    adapters.
     """
     if os.environ.get("GARDEN_SKILL_PATHS") is not None:
         return _scan_skill_roots(_skill_search_roots(target_root, manifest))
@@ -283,14 +319,24 @@ def discover_installed_skills(
         [a for a in (adapters or ()) if a in ADAPTER_SKILL_DIRS]
     )
     if scoped_adapters:
-        per_adapter = [
-            _scan_skill_roots(
+        per_adapter: list[dict[str, str]] = []
+        for adapter in scoped_adapters:
+            found_for_adapter = _scan_skill_roots(
                 _skill_search_roots(
                     target_root, manifest, raw_dirs=ADAPTER_SKILL_DIRS[adapter]
                 )
             )
-            for adapter in scoped_adapters
-        ]
+            if adapter == "gemini":
+                skills_enabled, disabled_skills = _load_gemini_skill_policy(target_root)
+                if not skills_enabled:
+                    found_for_adapter = {}
+                elif disabled_skills:
+                    found_for_adapter = {
+                        k: v
+                        for k, v in found_for_adapter.items()
+                        if k not in disabled_skills
+                    }
+            per_adapter.append(found_for_adapter)
         common_names = set(per_adapter[0].keys())
         for mapping in per_adapter[1:]:
             common_names &= set(mapping.keys())
@@ -309,7 +355,10 @@ def _is_non_empty_str(value: Any) -> bool:
 def _is_valid_mcp_server_config(cfg: Any) -> bool:
     if not isinstance(cfg, dict):
         return False
-    return any(_is_non_empty_str(cfg.get(key)) for key in ("command", "url", "serverUrl"))
+    return any(
+        _is_non_empty_str(cfg.get(key))
+        for key in ("command", "url", "serverUrl", "httpUrl")
+    )
 
 
 def _is_disabled_mcp_server_config(cfg: Any) -> bool:
@@ -405,9 +454,19 @@ def _apply_mcp_mapping(
         )
 
 
-def _finalize_mcp_entries(state: dict[str, _McpEntry]) -> dict[str, _McpEntry]:
+def _finalize_mcp_entries(
+    state: dict[str, _McpEntry],
+    *,
+    allowed_names: set[str] | None = None,
+    excluded_names: set[str] | None = None,
+) -> dict[str, _McpEntry]:
     active: dict[str, _McpEntry] = {}
+    excluded = excluded_names or set()
     for name, entry in state.items():
+        if name in excluded:
+            continue
+        if allowed_names is not None and name not in allowed_names:
+            continue
         if _is_disabled_mcp_server_config(entry.cfg):
             continue
         if _is_valid_mcp_server_config(entry.cfg) or entry.schema_dir is not None:
@@ -465,6 +524,7 @@ def _apply_mcp_source(
     target_root: Path,
     *,
     trusted_origin: bool,
+    filter_state: dict[str, Any] | None = None,
 ) -> None:
     if kind == "schema_dir":
         if not path.is_dir():
@@ -503,7 +563,27 @@ def _apply_mcp_source(
     if data is None:
         return
 
-    if kind == "json":
+    if kind == "gemini_settings":
+        _apply_mcp_mapping(
+            state, data.get("mcpServers"), str(path), trusted_origin=trusted_origin
+        )
+        mcp_policy = data.get("mcp")
+        if isinstance(mcp_policy, dict) and filter_state is not None:
+            raw_allowed = mcp_policy.get("allowed")
+            if isinstance(raw_allowed, list):
+                parsed_allowed = {
+                    item.strip()
+                    for item in raw_allowed
+                    if isinstance(item, str) and item.strip()
+                }
+                filter_state["allowed"] = parsed_allowed if parsed_allowed else None
+            raw_excluded = mcp_policy.get("excluded")
+            if isinstance(raw_excluded, list):
+                excluded_set: set[str] = filter_state.setdefault("excluded", set())
+                for item in raw_excluded:
+                    if isinstance(item, str) and item.strip():
+                        excluded_set.add(item.strip())
+    elif kind == "json":
         _apply_mcp_mapping(
             state, data.get("mcpServers"), str(path), trusted_origin=trusted_origin
         )
@@ -542,6 +622,7 @@ def _discover_mcp_entries_for_profile(
     target_root: Path, profile_sources: tuple[tuple[str, str, bool], ...]
 ) -> dict[str, _McpEntry]:
     state: dict[str, _McpEntry] = {}
+    filter_state: dict[str, Any] = {"allowed": None, "excluded": set()}
     for raw_path, kind, trusted in profile_sources:
         _apply_mcp_source(
             state,
@@ -549,8 +630,13 @@ def _discover_mcp_entries_for_profile(
             kind,
             target_root,
             trusted_origin=trusted,
+            filter_state=filter_state,
         )
-    return _finalize_mcp_entries(state)
+    return _finalize_mcp_entries(
+        state,
+        allowed_names=filter_state["allowed"],
+        excluded_names=filter_state["excluded"],
+    )
 
 
 def _discover_mcp_entries(
@@ -1178,7 +1264,7 @@ def _probe_legacy_sse_mcp(
 
 
 def _probe_http_mcp(cfg: dict[str, Any], timeout_sec: float) -> tuple[bool, str]:
-    url = str(cfg.get("url") or cfg.get("serverUrl") or "").strip()
+    url = _cfg_url(cfg) or ""
     parsed = urllib_parse.urlparse(url)
     if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
         return False, f"unsupported MCP URL scheme or host: {url!r}"
@@ -1263,9 +1349,7 @@ def _probe_mcp_entry(
             timeout_sec,
             trust_project_mcp=trust_project_mcp,
         )
-    if _is_non_empty_str(entry.cfg.get("url")) or _is_non_empty_str(
-        entry.cfg.get("serverUrl")
-    ):
+    if _cfg_url(entry.cfg) is not None:
         has_auth = _cfg_has_auth(entry.cfg)
         if has_auth and not trust_project_mcp:
             if entry.inherited_auth_origin_mismatch:

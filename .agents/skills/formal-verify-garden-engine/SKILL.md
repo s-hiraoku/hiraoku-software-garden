@@ -5,11 +5,11 @@ description: "Formally verify the safety invariants of hiraoku-software-garden's
 
 # Formally verify Garden engine & delegation invariants
 
-This skill runs a bounded exhaustive verifier directly against the real Python production code in `src/garden/engine.py`, `src/garden/artifacts.py`, `src/garden/definition.py`, `src/garden/guard.py`, and `src/garden/publish.py` (61,842 reachable scenarios and combinations in ~2 seconds, zero external dependencies).
+This skill runs a bounded exhaustive verifier directly against the real Python production code in `src/garden/engine.py`, `src/garden/artifacts.py`, `src/garden/definition.py`, `src/garden/guard.py`, and `src/garden/publish.py` (48,720 reachable scenarios and combinations in ~2 seconds, zero external dependencies).
 
 ## Covered code & sync record
 
-- **Last verified sync commit:** `b81fc5d`
+- **Last verified sync commit:** `177e5b2`
 - **Covered files and functions:**
   - `src/garden/engine.py`: `run_flow`, `_evaluate_criteria`, `_apply_effective_delegation`, `VERDICT_EXIT_CODES`
   - `src/garden/artifacts.py`: `resolve_report_kind`
@@ -20,7 +20,7 @@ This skill runs a bounded exhaustive verifier directly against the real Python p
 Check whether your change touches covered code before deciding to skip:
 
 ```sh
-git diff --name-only b81fc5d -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
+git diff --name-only 177e5b2 -- src/garden/engine.py src/garden/artifacts.py src/garden/definition.py src/garden/guard.py src/garden/publish.py
 ```
 
 If that command outputs any file, you **must** run the verifier below and confirm whether the verifier still matches the code at your new commit.
@@ -42,7 +42,7 @@ If that command outputs any file, you **must** run the verifier below and confir
 - **Why this tool:** Neither a Java Runtime (for TLA+/TLC), Quint, Lean 4, nor Z3 is installed in this environment, and the Nursery repository intentionally maintains zero third-party dependencies. Running exhaustive exploration directly against the real Python functions avoids hand-model drift and runs in ~2 seconds on every developer machine and CI runner.
 - **Explicit bounds:**
   - `engine.py` / `artifacts.py`: 12,840 combinations across `specs_approved ∈ {True, False}`, `eval_changed ∈ {True, False}`, `force_observe_only ∈ {True, False}`, `scope ∈ {all_specs, flow_checks}`, `on_fail ∈ {abort, escalate, retry, fix_and_retry}`, `on_inconclusive ∈ {escalate, retry, abort}`, `max_retries ∈ {0, 1, 2}`, cache-primed vs unprimed flows, 6 bounded check-outcome sequences, 3 second-check outcomes, and 5 agent/guard outcomes.
-  - `definition.py`: 45,927 combinations across 3 modes, 3 `allowed_paths` sets, 3 `max_retries` values, 3 `max_cost_usd` values, and 3 `require_checks` sets.
+  - `definition.py`: 32,805 combinations across 3 modes, 3 `allowed_paths` sets, 3 `max_retries` values, 3 `max_cost_usd` values, and 3 `require_checks` sets.
   - `guard.py`: 195 `(path, pattern)` combinations across hidden directories (`.garden/**`, `.github/workflows/**`), lookalike directories (`garden/...`), `./` prefixes, and nested files.
   - `publish.py`: 2,880 combinations across 5 verdicts, 3 delegation modes, branch presence, 3 `verified_commit` states (`None`, `target_commit`, changed commit), `target_on_base ∈ {True, False}`, `evaluation_criteria_changed`, `flow_scope`, and 4 criteria-completeness shapes.
 - **Out of scope (not proved by this check):**
@@ -55,7 +55,7 @@ If that command outputs any file, you **must** run the verifier below and confir
 .agents/skills/formal-verify-garden-engine/scripts/verify_invariants.py
 ```
 
-Expected passing output: exit code `0`, `"total_states_checked": 61842`, all eight invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`. When `GARDEN_EVIDENCE_DIR` is set, it also writes `$GARDEN_EVIDENCE_DIR/formal.json` for native `kind = "formal_check"` integration.
+Expected passing output: exit code `0`, `"total_states_checked": 48720`, all eight invariants `"PROVED_WITHIN_BOUNDS"`, and `"counterexamples": {}`. When `GARDEN_EVIDENCE_DIR` is set, it also writes `$GARDEN_EVIDENCE_DIR/formal.json` for native `kind = "formal_check"` integration.
 
 ## Interpreting failures (real bug vs verifier drift)
 

@@ -37,6 +37,7 @@ from garden.git_utils import (
 )
 from garden.guard import snapshot_untracked_files, verify_post_agent_guard
 from garden.harness import evaluate_harness_requirements, flow_real_adapters
+from garden.issues import fetch_github_issue
 from garden.report import fetch_github_issue_comments, find_satisfied_marker
 from garden.spec import TrustAnchorResult, verify_trust_anchor
 
@@ -69,18 +70,20 @@ def compute_idempotency_key(
     flow_name: str,
     approved_definition_blob_sha: str | None,
     spec_blob_shas: list[str],
+    issue_key: str | None = None,
 ) -> str:
-    payload = "\n".join(
-        [
-            canonical_remote,
-            target_commit,
-            trigger_event,
-            trigger_id,
-            flow_name,
-            approved_definition_blob_sha or "",
-            ",".join(sorted(spec_blob_shas)),
-        ]
-    )
+    parts = [
+        canonical_remote,
+        target_commit,
+        trigger_event,
+        trigger_id,
+        flow_name,
+        approved_definition_blob_sha or "",
+        ",".join(sorted(spec_blob_shas)),
+    ]
+    if issue_key:
+        parts.append(issue_key)
+    payload = "\n".join(parts)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -370,6 +373,8 @@ def run_flow(
     include_proposed: bool = False,
     existing_comments: list[str] | None = None,
     check_github_markers: bool = False,
+    issue_context: dict[str, Any] | None = None,
+    fetch_issue: bool = False,
 ) -> EngineRunResult:
     started_dt = datetime.now(timezone.utc)
     started_mono = time.monotonic()
@@ -379,6 +384,34 @@ def run_flow(
     canonical_remote = _canonical_remote(remotes, root)
     target_commit = head_commit(root)
     dirty_before = is_dirty(root)
+
+    if issue_or_pr is not None and (
+        isinstance(issue_or_pr, bool) or issue_or_pr <= 0
+    ):
+        raise ValueError(f"--issue must be a positive integer, got {issue_or_pr!r}")
+    if issue_context is not None and fetch_issue:
+        raise ValueError("--fetch-issue cannot be combined with --issue-file / issue_context")
+
+    resolved_issue: dict[str, Any] | None = dict(issue_context) if issue_context is not None else None
+    if resolved_issue is None and fetch_issue:
+        if issue_or_pr is None:
+            raise ValueError("--fetch-issue requires --issue <number>")
+        resolved_issue = fetch_github_issue(issue_or_pr, cwd=root)
+    if resolved_issue is not None:
+        raw_num = resolved_issue.get("number")
+        if raw_num is not None and (
+            not isinstance(raw_num, int) or isinstance(raw_num, bool) or raw_num <= 0
+        ):
+            raise ValueError(f"issue context 'number' must be a positive integer, got {raw_num!r}")
+        file_num = raw_num if isinstance(raw_num, int) and not isinstance(raw_num, bool) else None
+        if issue_or_pr is not None and file_num is not None and file_num != issue_or_pr:
+            raise ValueError(
+                f"conflicting issue numbers: --issue {issue_or_pr} vs issue context #{file_num}"
+            )
+        if issue_or_pr is None and file_num is not None:
+            issue_or_pr = file_num
+        elif issue_or_pr is not None and file_num is None:
+            resolved_issue["number"] = issue_or_pr
 
     # Preflight: load definition & verify approval trust anchor
     anchor = verify_trust_anchor(root, approval_branch=approval_branch)
@@ -400,6 +433,38 @@ def run_flow(
     flow = definition.flows[flow_name]
     eff_delegation = _apply_effective_delegation(flow.delegation, anchor)
 
+    issue_key: str | None = None
+    if resolved_issue is not None:
+        canonical_issue_input = json.dumps(
+            {
+                "number": resolved_issue.get("number"),
+                "url": resolved_issue.get("url") or "",
+                "repository": resolved_issue.get("repository"),
+                "title": resolved_issue.get("title") or "",
+                "body": resolved_issue.get("body") or "",
+                "labels": list(resolved_issue.get("labels") or []),
+                "comments": [
+                    {
+                        "author": c.get("author") or "",
+                        "author_association": c.get("author_association") or "",
+                        "body": c.get("body") or "",
+                        "created_at": c.get("created_at") or "",
+                    }
+                    for c in (resolved_issue.get("comments") or [])
+                    if isinstance(c, dict)
+                ],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        content_hash = hashlib.sha256(
+            canonical_issue_input.encode("utf-8")
+        ).hexdigest()[:16]
+        num_part = str(issue_or_pr) if issue_or_pr is not None else "unnumbered"
+        issue_key = f"issue:{num_part}:{content_hash}"
+    elif issue_or_pr is not None:
+        issue_key = f"issue:{issue_or_pr}"
+
     idempotency_key = compute_idempotency_key(
         canonical_remote=canonical_remote,
         target_commit=target_commit,
@@ -408,6 +473,7 @@ def run_flow(
         flow_name=flow_name,
         approved_definition_blob_sha=anchor.approved_definition_blob_sha,
         spec_blob_shas=[rec.blob_sha for rec in anchor.specs],
+        issue_key=issue_key,
     )
 
     runs_root = root / ".garden" / "runs"
@@ -538,6 +604,13 @@ def run_flow(
             "escalation": escalation,
             "steps": step_records,
         }
+        if resolved_issue is not None:
+            run_data["issue"] = {
+                "number": resolved_issue.get("number"),
+                "title": resolved_issue.get("title"),
+                "url": resolved_issue.get("url") or "",
+                "repository": resolved_issue.get("repository"),
+            }
         write_run_artifacts(
             run_dir, run_data, requested_report_kind=requested_report_kind
         )
@@ -553,6 +626,8 @@ def run_flow(
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
+        "cost_known_usd": 0.0,
+        "cost_unknown": False,
     }
 
     # Preflight gate: unapproved spec -> NEEDS_HUMAN
@@ -664,12 +739,18 @@ def run_flow(
         agent_cfg = definition.agents[agent_step.agent]
         sdir, rel_step = _next_step_dir(agent_step.id)
 
-        remaining_budget = max(0.0, eff_delegation.max_cost_usd - usage_totals["cost_usd"])
+        remaining_budget = max(
+            0.0, eff_delegation.max_cost_usd - usage_totals["cost_known_usd"]
+        )
         effective_step_cost_cap = (
             min(agent_cfg.max_cost_usd, remaining_budget)
             if agent_cfg.max_cost_usd is not None
             else remaining_budget
         )
+
+        enriched_context = dict(context)
+        if resolved_issue is not None and "issue" not in enriched_context:
+            enriched_context["issue"] = resolved_issue
 
         request = AgentRequest(
             run_id=run_id,
@@ -684,7 +765,7 @@ def run_flow(
                 "forbidden_paths": list(eff_delegation.forbidden_paths),
                 "max_cost_usd": effective_step_cost_cap,
             },
-            context=context,
+            context=enriched_context,
         )
 
         if agent_cfg.adapter == "mock":
@@ -698,9 +779,15 @@ def run_flow(
 
         usage_totals["input_tokens"] += response.usage.input_tokens
         usage_totals["output_tokens"] += response.usage.output_tokens
-        usage_totals["cost_usd"] = round(
-            usage_totals["cost_usd"] + response.usage.cost_usd, 6
-        )
+        if response.usage.cost_usd is None:
+            usage_totals["cost_unknown"] = True
+            usage_totals["cost_usd"] = None
+        else:
+            usage_totals["cost_known_usd"] = round(
+                usage_totals["cost_known_usd"] + response.usage.cost_usd, 6
+            )
+            if not usage_totals["cost_unknown"]:
+                usage_totals["cost_usd"] = usage_totals["cost_known_usd"]
 
         elapsed = time.monotonic() - started_mono
         guard_res = verify_post_agent_guard(
@@ -709,7 +796,8 @@ def run_flow(
             eff_delegation,
             step_cost_usd=response.usage.cost_usd,
             agent_max_cost_usd=agent_cfg.max_cost_usd,
-            cumulative_cost_usd=usage_totals["cost_usd"],
+            cumulative_cost_usd=usage_totals["cost_known_usd"],
+            allow_unknown_cost=agent_cfg.allow_unknown_cost,
             elapsed_sec=elapsed,
             baseline_untracked=baseline_untracked,
             ignore_prefixes=guard_ignore_prefixes,

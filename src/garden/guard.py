@@ -118,9 +118,10 @@ def verify_post_agent_guard(
     target_commit: str,
     delegation: DelegationConfig,
     *,
-    step_cost_usd: float = 0.0,
+    step_cost_usd: float | None = 0.0,
     agent_max_cost_usd: float | None = None,
     cumulative_cost_usd: float = 0.0,
+    allow_unknown_cost: bool = False,
     elapsed_sec: float = 0.0,
     baseline_untracked: dict[str, str] | None = None,
     ignore_prefixes: tuple[str, ...] = (),
@@ -157,20 +158,35 @@ def verify_post_agent_guard(
                     f"allowed_path_violation: '{rel_path}' is outside allowed_paths"
                 )
 
-    remaining_before_step = max(0.0, delegation.max_cost_usd - (cumulative_cost_usd - step_cost_usd))
-    effective_step_cap = (
-        min(agent_max_cost_usd, remaining_before_step)
-        if agent_max_cost_usd is not None
-        else remaining_before_step
-    )
-    if agent_max_cost_usd is not None and step_cost_usd > agent_max_cost_usd:
-        violations.append(
-            f"agent_cost_limit_exceeded: step cost ${step_cost_usd:.4f} > agent max ${agent_max_cost_usd:.4f}"
+    if step_cost_usd is None:
+        if agent_max_cost_usd is not None:
+            violations.append(
+                f"agent_cost_unverifiable: adapter did not report cost_usd; cannot verify agent max ${agent_max_cost_usd:.4f}"
+            )
+        elif not allow_unknown_cost:
+            violations.append(
+                f"flow_cost_unverifiable: adapter did not report cost_usd; cannot verify delegation max ${delegation.max_cost_usd:.4f} (use a cost-reporting wrapper or set allow_unknown_cost = true on the agent for flat-rate/externally-capped accounts)"
+            )
+    else:
+        remaining_before_step = max(
+            0.0, delegation.max_cost_usd - (cumulative_cost_usd - step_cost_usd)
         )
-    if step_cost_usd > effective_step_cap + 1e-9 or cumulative_cost_usd > delegation.max_cost_usd + 1e-9:
-        violations.append(
-            f"flow_cost_limit_exceeded: cumulative cost ${cumulative_cost_usd:.4f} > max ${delegation.max_cost_usd:.4f}"
+        effective_step_cap = (
+            min(agent_max_cost_usd, remaining_before_step)
+            if agent_max_cost_usd is not None
+            else remaining_before_step
         )
+        if agent_max_cost_usd is not None and step_cost_usd > agent_max_cost_usd:
+            violations.append(
+                f"agent_cost_limit_exceeded: step cost ${step_cost_usd:.4f} > agent max ${agent_max_cost_usd:.4f}"
+            )
+        if (
+            step_cost_usd > effective_step_cap + 1e-9
+            or cumulative_cost_usd > delegation.max_cost_usd + 1e-9
+        ):
+            violations.append(
+                f"flow_cost_limit_exceeded: cumulative cost ${cumulative_cost_usd:.4f} > max ${delegation.max_cost_usd:.4f}"
+            )
 
     if elapsed_sec > delegation.max_duration_sec:
         violations.append(

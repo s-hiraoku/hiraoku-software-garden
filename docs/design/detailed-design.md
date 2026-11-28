@@ -207,10 +207,11 @@ invariants = ["INV-001"]
 status = "active"
 
 [agents.default]
-adapter = "codex"                    # codex | claude | antigravity | custom | mock
+adapter = "codex"                    # codex | claude | gemini | antigravity | custom | mock
 command = ["codex", "exec", "--sandbox", "workspace-write"]
 timeout_sec = 600
-max_cost_usd = 2.0
+max_cost_usd = 2.0                   # 省略可。allow_unknown_cost = true とは併用不可
+# allow_unknown_cost = false         # 費用を返さない CLI（例: Gemini CLI）で max_retries/max_duration_sec 制御に明示同意する場合のみ true
 
 [[triggers]]
 id = "pr-verify"
@@ -929,7 +930,7 @@ search_paths = [
 | 導入・保守 | `garden upgrade [--target PATH] [--to VER] [--apply]` | テンプレート新旧差分を解析し独自設定を保って更新 | `0` 成功 / `2` 競合・不正 |
 | 導入・保守 | `garden spec-diff [--target PATH] [--base REF] [--head REF]` | 承認済み仕様との条件単位差分（追加・削除・変更）と影響チェック・フローを解析 | `0` 整合 / `1` ガーデン更新要（未カバー追加・孤立チェック） / `2` 入力不正 |
 | 導入・保守 | `garden template-gate (--type TYPE \| --all) [--version N] [--output PATH]` | テンプレート公開ゲート（新規導入の合格・失敗検出＋更新保全）を実行し `release-evidence.json` を出力 | `0` 全合格 / `1` 不合格 / `2` 入力不正 |
-| 実行・記録 | `garden run <flow> [--target PATH] [--approval-branch BRANCH] [--trigger-event E] [--trigger-id ID] [--trigger-action A] [--trigger-label L] [--issue N] [--force] [--include-proposed] [--check-github-markers] [--existing-comments-file PATH] [--keep-worktree] [--no-worktree] [--json]` | 定義済みフローを実行し Run Artifacts と総合判定を生成 | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
+| 実行・記録 | `garden run <flow> [--target PATH] [--approval-branch BRANCH] [--trigger-event E] [--trigger-id ID] [--trigger-action A] [--trigger-label L] [--issue N] [--fetch-issue] [--issue-file PATH] [--force] [--include-proposed] [--check-github-markers] [--existing-comments-file PATH] [--keep-worktree] [--no-worktree] [--json]` | 定義済みフローを実行し Run Artifacts と総合判定を生成（`--fetch-issue` / `--issue-file` で Issue 本文をタスク文脈としてエージェントへ渡す） | `0` `SATISFIED` / `1` `UNSATISFIED` / `2` 設定・引数エラー / `3` `INCONCLUSIVE` / `4` `NEEDS_HUMAN` / `5` `ABORTED` |
 | 実行・記録 | `garden report [<run-dir>] [--format md\|json] [--post-github-issue N] [--mark-running N \| --clear-running N]` | `run.json` から要約生成・GitHub Issue/PR への投稿とラベル更新、または実行開始・中断時の `garden:running` 付与・解除 | `0` 成功 / `1` 投稿失敗 / `2` 入力不正 |
 | 実行・記録 | `garden reflect <run-dir> [--base BRANCH] [--execute]` | 工程⑥の反映ゲート判定（既定ドライラン、`--execute` で PR 作成・条件充足時のみ `--auto` マージ） | `0` 反映許可・なし / `1` ブロック・実行失敗 / `2` 入力不正 |
 | 改善・測定 | `garden feedback add\|from-comment\|update\|summary [--target PATH]` | 人の介入レコードの記録（CLI / `/garden feedback` コメント解析）・状態更新・分類別集計 | `0` 成功 / `2` 入力不正 |

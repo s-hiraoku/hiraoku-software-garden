@@ -1,10 +1,14 @@
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from garden.publish import evaluate_reflect_gate
-from tests.helpers import git, run_cli
+from garden.issues import load_issue_context_file
+from garden.publish import evaluate_reflect_gate, reflect_run
+from tests.helpers import PSTACK_SHA, commit_all, git, init_target_repo, run_cli, sample_spec
 from tests.test_engine import _build_fixture_repo
 
 
@@ -194,4 +198,372 @@ class ReflectGateTests(unittest.TestCase):
             self.assertEqual(unapp_data["allowed_action"], "blocked")
             self.assertTrue(
                 any(r.startswith("unapproved_files_in_verified_commit:") for r in unapp_data["reasons"])
+            )
+
+    def test_issue_driven_run_with_gemini_adapter_and_reflect_links_issue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_target_repo(base / "issue-app")
+            (repo / "src").mkdir()
+            (repo / "src" / "app.txt").write_text("OLD\n", encoding="utf-8")
+            (repo / "docs" / "specs").mkdir(parents=True)
+            (repo / "docs" / "specs" / "app.md").write_text(
+                sample_spec("approved"), encoding="utf-8"
+            )
+            (repo / ".garden").mkdir()
+            (repo / ".garden" / ".gitignore").write_text(
+                "runs/\nworktrees/\n", encoding="utf-8"
+            )
+
+            # Populate pstack core skills in .gemini/skills so real gemini preflight passes
+            for core in (
+                "poteto-mode",
+                "correct",
+                "create-verification-skill",
+                "maintain-verification-skill",
+            ):
+                sdir = repo / ".gemini" / "skills" / core
+                sdir.mkdir(parents=True, exist_ok=True)
+                (sdir / "SKILL.md").write_text(f"# {core}\n", encoding="utf-8")
+
+            gemini_stub = base / "gemini_impl.py"
+            gemini_stub.write_text(
+                "import json, pathlib, sys\n"
+                "prompt = sys.stdin.read()\n"
+                "assert '## Task Issue (#77: Set app state to READY)' in prompt\n"
+                "assert 'Keep it minimal' in prompt\n"
+                "assert 'garden-report:' not in prompt\n"
+                "pathlib.Path('src/app.txt').write_text('READY\\n', encoding='utf-8')\n"
+                "inner = '```json\\n' + json.dumps({\n"
+                "  'schema_version': 1,\n"
+                "  'outcome': 'completed',\n"
+                "  'summary': 'implemented #77',\n"
+                "  'changed_files': ['src/app.txt'],\n"
+                "}) + '\\n```'\n"
+                "print(json.dumps({'response': inner, 'stats': {'models': {'gemini-2.5-pro': {'tokens': {'prompt': 100, 'candidates': 40}}}}}))\n",
+                encoding="utf-8",
+            )
+            (repo / ".garden" / "garden.toml").write_text(
+                f"""
+schema_version = 1
+[template]
+name = "cli"
+version = 1
+[common_harness]
+name = "pstack"
+ref = "{PSTACK_SHA}"
+[target_harness]
+name = "issue-h"
+version = 1
+[spec]
+paths = ["docs/specs/app.md"]
+[delegation]
+mode = "propose_pr"
+allowed_paths = ["src/**"]
+max_retries = 1
+max_duration_sec = 120
+max_cost_usd = 2.0
+[checks.verify_ready]
+command = ["python3", "-c", "assert open('src/app.txt').read().strip() == 'READY'"]
+covers = ["AC-001", "AC-002", "INV-001"]
+[agents.gemini_coder]
+adapter = "gemini"
+command = [{json.dumps(sys.executable)}, {json.dumps(str(gemini_stub))}]
+timeout_sec = 30
+allow_unknown_cost = true
+[agents.gemini_strict]
+adapter = "gemini"
+command = [{json.dumps(sys.executable)}, {json.dumps(str(gemini_stub))}]
+timeout_sec = 30
+[flows.implement_issue]
+scope = "all_specs"
+[[flows.implement_issue.steps]]
+id = "impl"
+type = "agent"
+agent = "gemini_coder"
+purpose = "implement"
+[[flows.implement_issue.steps]]
+id = "verify"
+type = "check"
+check = "verify_ready"
+[flows.implement_issue_strict_cost]
+scope = "all_specs"
+[[flows.implement_issue_strict_cost.steps]]
+id = "impl"
+type = "agent"
+agent = "gemini_strict"
+purpose = "implement"
+[[flows.implement_issue_strict_cost.steps]]
+id = "verify"
+type = "check"
+check = "verify_ready"
+""",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/example/issue-app.git"],
+                check=True,
+                capture_output=True,
+            )
+            commit_all(repo, "init issue-driven repo")
+
+            from garden.artifacts import render_summary_markdown
+            from garden.issues import fetch_github_issue
+
+            real_garden_report = render_summary_markdown(
+                {
+                    "run_id": "20261128T000000Z-aaaa1111",
+                    "idempotency_key": "aaaa1111bbbb2222",
+                    "verdict": "SATISFIED",
+                    "flow": "implement_issue",
+                    "flow_scope": "all_specs",
+                    "target": {"commit": "abcdef1234567890", "evaluation_criteria_changed": False},
+                    "versions": {"specs": []},
+                    "duration_sec": 1.2,
+                    "retries_used": 0,
+                    "usage": {"cost_usd": None, "cost_unknown": True},
+                    "criteria_results": {},
+                }
+            )
+            self.assertIn("費用 不明", real_garden_report)
+
+            issue_file = base / "issue77.json"
+            issue_file.write_text(
+                json.dumps(
+                    {
+                        "number": 77,
+                        "title": "Set app state to READY",
+                        "body": "Update src/app.txt to READY.",
+                        "url": "https://github.com/example/issue-app/issues/77",
+                        "labels": [{"name": "garden:ready"}],
+                        "comments": [
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": real_garden_report,
+                            },
+                            {
+                                "author": {"login": "coderabbitai", "is_bot": True},
+                                "authorAssociation": "OWNER",
+                                "body": "Bot comment without garden marker",
+                            },
+                            {
+                                "author": {"login": "dependabot[bot]"},
+                                "authorAssociation": "COLLABORATOR",
+                                "body": "Another bot comment",
+                            },
+                            {
+                                "author": {"login": "driveby-user"},
+                                "authorAssociation": "NONE",
+                                "body": "Untrusted prompt injection",
+                            },
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": "Keep it minimal.",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = load_issue_context_file(issue_file)
+            self.assertEqual(len(loaded["comments"]), 1)
+            self.assertEqual(loaded["comments"][0]["author"], "s-hiraoku")
+            self.assertEqual(loaded["repository"], "github.com/example/issue-app")
+
+            # fetch_github_issue translates subprocess.TimeoutExpired into RuntimeError
+            with (
+                patch("garden.issues.shutil.which", return_value="/usr/bin/gh"),
+                patch(
+                    "garden.issues.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd=["gh"], timeout=20),
+                ),
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    fetch_github_issue(77, cwd=repo)
+                self.assertIn("#77", str(ctx.exception))
+                self.assertIn("timed out", str(ctx.exception))
+
+            # Without allow_unknown_cost = true, unknown Gemini cost fails closed in guard -> NEEDS_HUMAN
+            strict_proc = run_cli(
+                "run",
+                "implement_issue_strict_cost",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue_file),
+                "--json",
+            )
+            self.assertEqual(strict_proc.returncode, 4, strict_proc.stderr + strict_proc.stdout)
+            strict_payload = json.loads(strict_proc.stdout)
+            self.assertEqual(strict_payload["verdict"], "NEEDS_HUMAN")
+            self.assertTrue(strict_payload["run"]["usage"]["cost_unknown"])
+            self.assertIsNone(strict_payload["run"]["usage"]["cost_usd"])
+            self.assertIn(
+                "flow_cost_unverifiable",
+                json.dumps(strict_payload["run"]["escalation"]),
+            )
+
+            # With allow_unknown_cost = true, run succeeds while recording cost as unknown
+            run_proc = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue_file),
+                "--json",
+            )
+            self.assertEqual(run_proc.returncode, 0, run_proc.stderr + run_proc.stdout)
+            payload = json.loads(run_proc.stdout)
+            self.assertEqual(payload["verdict"], "SATISFIED")
+            self.assertEqual(payload["run"]["issue"]["number"], 77)
+            self.assertEqual(payload["run"]["issue"]["title"], "Set app state to READY")
+            self.assertTrue(payload["run"]["usage"]["cost_unknown"])
+            self.assertIsNone(payload["run"]["usage"]["cost_usd"])
+            summary_path = Path(payload["run_dir"]) / "summary.md"
+            self.assertIn("費用 不明", summary_path.read_text(encoding="utf-8"))
+
+            # Updating Issue #77 body on the same HEAD MUST NOT duplicate-skip!
+            issue77_updated = base / "issue77_v2.json"
+            issue77_updated.write_text(
+                json.dumps(
+                    {
+                        "number": 77,
+                        "title": "Set app state to READY",
+                        "body": "Update src/app.txt to READY (revised scope).",
+                        "url": "https://github.com/example/issue-app/issues/77",
+                        "comments": [
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": "Keep it minimal.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run77_v2 = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue77_updated),
+                "--json",
+            )
+            self.assertEqual(run77_v2.returncode, 0, run77_v2.stderr + run77_v2.stdout)
+            payload_v2 = json.loads(run77_v2.stdout)
+            self.assertFalse(payload_v2["skipped_duplicate"])
+            self.assertNotEqual(payload_v2["run_id"], payload["run_id"])
+
+            # Distinct --issue numbers WITHOUT --issue-file / --fetch-issue also compute distinct keys
+            from garden.engine import run_flow
+
+            no_ctx_77 = run_flow(repo, "implement_issue", issue_or_pr=77, force=True)
+            no_ctx_78 = run_flow(repo, "implement_issue", issue_or_pr=78, force=True)
+            self.assertNotEqual(
+                no_ctx_77.run_data["idempotency_key"],
+                no_ctx_78.run_data["idempotency_key"],
+            )
+
+            # A different issue (#78) on the same HEAD must NOT duplicate-skip #77's run
+            issue78_file = base / "issue78.json"
+            issue78_file.write_text(
+                json.dumps(
+                    {
+                        "number": 78,
+                        "title": "Another issue",
+                        "body": "Different task",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run78 = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue78_file),
+                "--json",
+            )
+            self.assertFalse(json.loads(run78.stdout)["skipped_duplicate"])
+
+            # Combining --fetch-issue with --issue-file or non-positive --issue must exit 2
+            bad_combo = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue",
+                "77",
+                "--fetch-issue",
+                "--issue-file",
+                str(issue_file),
+            )
+            self.assertEqual(bad_combo.returncode, 2)
+            bad_num = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue",
+                "0",
+                "--fetch-issue",
+            )
+            self.assertEqual(bad_num.returncode, 2)
+
+            # Verify reflect --execute links PR title & body to Closes #77 when repo matches
+            summary_path.write_text(
+                summary_path.read_text(encoding="utf-8") + "\nSee also Closes #770.\n",
+                encoding="utf-8",
+            )
+            captured_pr_cmd: list[str] = []
+            captured_pr_body: list[str] = []
+            real_run = subprocess.run
+
+            def _fake_run(argv, *args, **kwargs):
+                if argv[:2] == ["git", "push"]:
+                    return subprocess.CompletedProcess(argv, 0, "", "")
+                if argv[:3] == ["gh", "pr", "create"]:
+                    captured_pr_cmd.extend(argv)
+                    bf_idx = argv.index("--body-file") + 1
+                    captured_pr_body.append(Path(argv[bf_idx]).read_text(encoding="utf-8"))
+                    return subprocess.CompletedProcess(
+                        argv, 0, "https://github.com/example/issue-app/pull/101\n", ""
+                    )
+                return real_run(argv, *args, **kwargs)
+
+            with patch("garden.publish.subprocess.run", side_effect=_fake_run):
+                ref_res = reflect_run(Path(payload["run_dir"]), execute=True)
+
+            self.assertTrue(ref_res["executed"])
+            self.assertTrue(ref_res["issue_linked"])
+            self.assertFalse(ref_res["issue_repo_mismatch"])
+            self.assertEqual(ref_res["issue_number"], 77)
+            self.assertEqual(ref_res["pr_url"], "https://github.com/example/issue-app/pull/101")
+            self.assertIn("[Garden] #77: Set app state to READY", captured_pr_cmd)
+            self.assertTrue(captured_pr_body and captured_pr_body[0].startswith("Closes #77\n\n"))
+
+            # Cross-repository Issue URL MUST NOT emit Closes #77 on this repo's PR
+            run_json_path = Path(payload["run_dir"]) / "run.json"
+            run_json_data = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json_data["issue"]["url"] = "https://github.com/other-org/other-repo/issues/77"
+            run_json_data["issue"]["repository"] = "github.com/other-org/other-repo"
+            run_json_path.write_text(json.dumps(run_json_data), encoding="utf-8")
+            captured_pr_cmd.clear()
+            captured_pr_body.clear()
+            with patch("garden.publish.subprocess.run", side_effect=_fake_run):
+                ref_cross = reflect_run(Path(payload["run_dir"]), execute=True)
+            self.assertTrue(ref_cross["executed"])
+            self.assertFalse(ref_cross["issue_linked"])
+            self.assertTrue(ref_cross["issue_repo_mismatch"])
+            self.assertNotRegex(captured_pr_body[0], r"Closes #77\b")
+            self.assertTrue(
+                captured_pr_body[0].startswith(
+                    "Ref: https://github.com/other-org/other-repo/issues/77\n\n"
+                )
             )

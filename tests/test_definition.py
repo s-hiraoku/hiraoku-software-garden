@@ -177,3 +177,35 @@ run_on_demand = true
         bad = BASE_TOML.replace('invariants = ["INV-001"]', "")
         with self.assertRaisesRegex(DefinitionError, "invariants"):
             load_definition_bytes(bad.encode("utf-8"))
+
+    def test_rejects_empty_allowed_paths_in_write_modes_default_and_flow_override(self):
+        for mode in ("propose_pr", "auto_merge"):
+            bad_default = BASE_TOML.replace('mode = "propose_pr"', f'mode = "{mode}"', 1).replace(
+                'allowed_paths = ["src/**", "tests/**"]', "allowed_paths = []", 1
+            )
+            with self.assertRaisesRegex(DefinitionError, "must be non-empty"):
+                load_definition_bytes(bad_default.encode("utf-8"))
+
+            bad_flow = BASE_TOML.replace('mode = "propose_pr"', f'mode = "{mode}"', 1) + f"""
+[flows.empty_override]
+[flows.empty_override.delegation]
+mode = "{mode}"
+allowed_paths = []
+[[flows.empty_override.steps]]
+id = "s1"
+type = "check"
+check = "unit"
+"""
+            with self.assertRaisesRegex(DefinitionError, "must be non-empty"):
+                load_definition_bytes(bad_flow.encode("utf-8"))
+
+    def test_rejects_allow_unknown_cost_combined_with_agent_max_cost_usd(self):
+        bad = BASE_TOML + """
+[agents.gemini_bad]
+adapter = "gemini"
+command = ["gemini", "-p", "Follow stdin.", "-o", "json"]
+max_cost_usd = 1.0
+allow_unknown_cost = true
+"""
+        with self.assertRaisesRegex(DefinitionError, "allow_unknown_cost"):
+            load_definition_bytes(bad.encode("utf-8"))
