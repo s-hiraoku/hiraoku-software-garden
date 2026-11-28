@@ -99,6 +99,7 @@ class AgentConfig:
     command: tuple[str, ...]
     timeout_sec: int = 600
     max_cost_usd: float | None = None
+    allow_unknown_cost: bool = False
 
 
 @dataclass(frozen=True)
@@ -569,12 +570,20 @@ def load_definition_bytes(raw: bytes, source: str = GARDEN_DEF_REL_PATH) -> Gard
                 if "max_cost_usd" in entry
                 else None
             )
+            allow_unknown_cost_raw = entry.get("allow_unknown_cost", False)
+            if not isinstance(allow_unknown_cost_raw, bool):
+                raise DefinitionError(f"{ctx}.allow_unknown_cost: expected boolean")
+            if allow_unknown_cost_raw and max_cost_usd is not None:
+                raise DefinitionError(
+                    f"{ctx}: allow_unknown_cost = true cannot be combined with max_cost_usd"
+                )
             agents[agent_name] = AgentConfig(
                 name=agent_name,
                 adapter=adapter,
                 command=command,
                 timeout_sec=timeout_sec,
                 max_cost_usd=max_cost_usd,
+                allow_unknown_cost=allow_unknown_cost_raw,
             )
 
     forced_forbidden = (*FORBIDDEN_ALWAYS, *spec.paths)

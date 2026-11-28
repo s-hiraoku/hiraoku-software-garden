@@ -198,3 +198,14 @@ check = "unit"
 """
             with self.assertRaisesRegex(DefinitionError, "must be non-empty"):
                 load_definition_bytes(bad_flow.encode("utf-8"))
+
+    def test_rejects_allow_unknown_cost_combined_with_agent_max_cost_usd(self):
+        bad = BASE_TOML + """
+[agents.gemini_bad]
+adapter = "gemini"
+command = ["gemini", "-p", "Follow stdin.", "-o", "json"]
+max_cost_usd = 1.0
+allow_unknown_cost = true
+"""
+        with self.assertRaisesRegex(DefinitionError, "allow_unknown_cost"):
+            load_definition_bytes(bad.encode("utf-8"))

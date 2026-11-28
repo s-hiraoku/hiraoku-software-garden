@@ -207,10 +207,11 @@ invariants = ["INV-001"]
 status = "active"
 
 [agents.default]
-adapter = "codex"                    # codex | claude | antigravity | custom | mock
+adapter = "codex"                    # codex | claude | gemini | antigravity | custom | mock
 command = ["codex", "exec", "--sandbox", "workspace-write"]
 timeout_sec = 600
-max_cost_usd = 2.0
+max_cost_usd = 2.0                   # 省略可。allow_unknown_cost = true とは併用不可
+# allow_unknown_cost = false         # 費用を返さない CLI（例: Gemini CLI）で max_retries/max_duration_sec 制御に明示同意する場合のみ true
 
 [[triggers]]
 id = "pr-verify"

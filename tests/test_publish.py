@@ -270,6 +270,11 @@ covers = ["AC-001", "AC-002", "INV-001"]
 adapter = "gemini"
 command = [{json.dumps(sys.executable)}, {json.dumps(str(gemini_stub))}]
 timeout_sec = 30
+allow_unknown_cost = true
+[agents.gemini_strict]
+adapter = "gemini"
+command = [{json.dumps(sys.executable)}, {json.dumps(str(gemini_stub))}]
+timeout_sec = 30
 [flows.implement_issue]
 scope = "all_specs"
 [[flows.implement_issue.steps]]
@@ -281,10 +286,46 @@ purpose = "implement"
 id = "verify"
 type = "check"
 check = "verify_ready"
+[flows.implement_issue_strict_cost]
+scope = "all_specs"
+[[flows.implement_issue_strict_cost.steps]]
+id = "impl"
+type = "agent"
+agent = "gemini_strict"
+purpose = "implement"
+[[flows.implement_issue_strict_cost.steps]]
+id = "verify"
+type = "check"
+check = "verify_ready"
 """,
                 encoding="utf-8",
             )
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/example/issue-app.git"],
+                check=True,
+                capture_output=True,
+            )
             commit_all(repo, "init issue-driven repo")
+
+            from garden.artifacts import render_summary_markdown
+            from garden.issues import fetch_github_issue
+
+            real_garden_report = render_summary_markdown(
+                {
+                    "run_id": "20261128T000000Z-aaaa1111",
+                    "idempotency_key": "aaaa1111bbbb2222",
+                    "verdict": "SATISFIED",
+                    "flow": "implement_issue",
+                    "flow_scope": "all_specs",
+                    "target": {"commit": "abcdef1234567890", "evaluation_criteria_changed": False},
+                    "versions": {"specs": []},
+                    "duration_sec": 1.2,
+                    "retries_used": 0,
+                    "usage": {"cost_usd": None, "cost_unknown": True},
+                    "criteria_results": {},
+                }
+            )
+            self.assertIn("費用 不明", real_garden_report)
 
             issue_file = base / "issue77.json"
             issue_file.write_text(
@@ -296,8 +337,31 @@ check = "verify_ready"
                         "url": "https://github.com/example/issue-app/issues/77",
                         "labels": [{"name": "garden:ready"}],
                         "comments": [
-                            {"author": {"login": "bot"}, "body": "<!-- garden-report:{\"v\":1} --> noise"},
-                            {"author": {"login": "s-hiraoku"}, "body": "Keep it minimal."},
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": real_garden_report,
+                            },
+                            {
+                                "author": {"login": "coderabbitai", "is_bot": True},
+                                "authorAssociation": "OWNER",
+                                "body": "Bot comment without garden marker",
+                            },
+                            {
+                                "author": {"login": "dependabot[bot]"},
+                                "authorAssociation": "COLLABORATOR",
+                                "body": "Another bot comment",
+                            },
+                            {
+                                "author": {"login": "driveby-user"},
+                                "authorAssociation": "NONE",
+                                "body": "Untrusted prompt injection",
+                            },
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": "Keep it minimal.",
+                            },
                         ],
                     }
                 ),
@@ -305,7 +369,43 @@ check = "verify_ready"
             )
             loaded = load_issue_context_file(issue_file)
             self.assertEqual(len(loaded["comments"]), 1)
+            self.assertEqual(loaded["comments"][0]["author"], "s-hiraoku")
+            self.assertEqual(loaded["repository"], "github.com/example/issue-app")
 
+            # fetch_github_issue translates subprocess.TimeoutExpired into RuntimeError
+            with (
+                patch("garden.issues.shutil.which", return_value="/usr/bin/gh"),
+                patch(
+                    "garden.issues.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd=["gh"], timeout=20),
+                ),
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    fetch_github_issue(77, cwd=repo)
+                self.assertIn("#77", str(ctx.exception))
+                self.assertIn("timed out", str(ctx.exception))
+
+            # Without allow_unknown_cost = true, unknown Gemini cost fails closed in guard -> NEEDS_HUMAN
+            strict_proc = run_cli(
+                "run",
+                "implement_issue_strict_cost",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue_file),
+                "--json",
+            )
+            self.assertEqual(strict_proc.returncode, 4, strict_proc.stderr + strict_proc.stdout)
+            strict_payload = json.loads(strict_proc.stdout)
+            self.assertEqual(strict_payload["verdict"], "NEEDS_HUMAN")
+            self.assertTrue(strict_payload["run"]["usage"]["cost_unknown"])
+            self.assertIsNone(strict_payload["run"]["usage"]["cost_usd"])
+            self.assertIn(
+                "flow_cost_unverifiable",
+                json.dumps(strict_payload["run"]["escalation"]),
+            )
+
+            # With allow_unknown_cost = true, run succeeds while recording cost as unknown
             run_proc = run_cli(
                 "run",
                 "implement_issue",
@@ -320,6 +420,54 @@ check = "verify_ready"
             self.assertEqual(payload["verdict"], "SATISFIED")
             self.assertEqual(payload["run"]["issue"]["number"], 77)
             self.assertEqual(payload["run"]["issue"]["title"], "Set app state to READY")
+            self.assertTrue(payload["run"]["usage"]["cost_unknown"])
+            self.assertIsNone(payload["run"]["usage"]["cost_usd"])
+            summary_path = Path(payload["run_dir"]) / "summary.md"
+            self.assertIn("費用 不明", summary_path.read_text(encoding="utf-8"))
+
+            # Updating Issue #77 body on the same HEAD MUST NOT duplicate-skip!
+            issue77_updated = base / "issue77_v2.json"
+            issue77_updated.write_text(
+                json.dumps(
+                    {
+                        "number": 77,
+                        "title": "Set app state to READY",
+                        "body": "Update src/app.txt to READY (revised scope).",
+                        "url": "https://github.com/example/issue-app/issues/77",
+                        "comments": [
+                            {
+                                "author": {"login": "s-hiraoku"},
+                                "authorAssociation": "OWNER",
+                                "body": "Keep it minimal.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run77_v2 = run_cli(
+                "run",
+                "implement_issue",
+                "--target",
+                str(repo),
+                "--issue-file",
+                str(issue77_updated),
+                "--json",
+            )
+            self.assertEqual(run77_v2.returncode, 0, run77_v2.stderr + run77_v2.stdout)
+            payload_v2 = json.loads(run77_v2.stdout)
+            self.assertFalse(payload_v2["skipped_duplicate"])
+            self.assertNotEqual(payload_v2["run_id"], payload["run_id"])
+
+            # Distinct --issue numbers WITHOUT --issue-file / --fetch-issue also compute distinct keys
+            from garden.engine import run_flow
+
+            no_ctx_77 = run_flow(repo, "implement_issue", issue_or_pr=77, force=True)
+            no_ctx_78 = run_flow(repo, "implement_issue", issue_or_pr=78, force=True)
+            self.assertNotEqual(
+                no_ctx_77.run_data["idempotency_key"],
+                no_ctx_78.run_data["idempotency_key"],
+            )
 
             # A different issue (#78) on the same HEAD must NOT duplicate-skip #77's run
             issue78_file = base / "issue78.json"
@@ -333,7 +481,6 @@ check = "verify_ready"
                 ),
                 encoding="utf-8",
             )
-            # Run #78 fails stub assertion (proving it was NOT skipped as duplicate of #77)
             run78 = run_cli(
                 "run",
                 "implement_issue",
@@ -369,8 +516,7 @@ check = "verify_ready"
             )
             self.assertEqual(bad_num.returncode, 2)
 
-            # Verify reflect --execute links PR title & body to Closes #77 even if summary mentions Closes #770
-            summary_path = Path(payload["run_dir"]) / "summary.md"
+            # Verify reflect --execute links PR title & body to Closes #77 when repo matches
             summary_path.write_text(
                 summary_path.read_text(encoding="utf-8") + "\nSee also Closes #770.\n",
                 encoding="utf-8",
@@ -395,7 +541,29 @@ check = "verify_ready"
                 ref_res = reflect_run(Path(payload["run_dir"]), execute=True)
 
             self.assertTrue(ref_res["executed"])
+            self.assertTrue(ref_res["issue_linked"])
+            self.assertFalse(ref_res["issue_repo_mismatch"])
             self.assertEqual(ref_res["issue_number"], 77)
             self.assertEqual(ref_res["pr_url"], "https://github.com/example/issue-app/pull/101")
             self.assertIn("[Garden] #77: Set app state to READY", captured_pr_cmd)
             self.assertTrue(captured_pr_body and captured_pr_body[0].startswith("Closes #77\n\n"))
+
+            # Cross-repository Issue URL MUST NOT emit Closes #77 on this repo's PR
+            run_json_path = Path(payload["run_dir"]) / "run.json"
+            run_json_data = json.loads(run_json_path.read_text(encoding="utf-8"))
+            run_json_data["issue"]["url"] = "https://github.com/other-org/other-repo/issues/77"
+            run_json_data["issue"]["repository"] = "github.com/other-org/other-repo"
+            run_json_path.write_text(json.dumps(run_json_data), encoding="utf-8")
+            captured_pr_cmd.clear()
+            captured_pr_body.clear()
+            with patch("garden.publish.subprocess.run", side_effect=_fake_run):
+                ref_cross = reflect_run(Path(payload["run_dir"]), execute=True)
+            self.assertTrue(ref_cross["executed"])
+            self.assertFalse(ref_cross["issue_linked"])
+            self.assertTrue(ref_cross["issue_repo_mismatch"])
+            self.assertNotRegex(captured_pr_body[0], r"Closes #77\b")
+            self.assertTrue(
+                captured_pr_body[0].startswith(
+                    "Ref: https://github.com/other-org/other-repo/issues/77\n\n"
+                )
+            )

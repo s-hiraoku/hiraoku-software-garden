@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 from typing import Any
 
+from garden.git_utils import list_remotes
+from garden.issues import parse_repo_identity
 from garden.report import load_run_data
 
 
@@ -361,6 +363,41 @@ def reflect_run(
     issue_title = (
         " ".join(str(issue_info.get("title") or "").split()) if issue_info else ""
     )
+    issue_url = str(issue_info.get("url") or "").strip() if issue_info else ""
+    issue_repo = (
+        (
+            str(issue_info.get("repository")).strip().lower()
+            if isinstance(issue_info.get("repository"), str) and issue_info.get("repository").strip()
+            else None
+        )
+        or parse_repo_identity(issue_url)
+    ) if issue_info else None
+
+    target_repo: str | None = None
+    if git_root is not None:
+        try:
+            remotes = list_remotes(git_root)
+            origin_url = remotes.get("origin") or (
+                remotes[sorted(remotes.keys())[0]] if remotes else None
+            )
+            target_repo = parse_repo_identity(origin_url)
+        except Exception:
+            target_repo = None
+    if target_repo is None:
+        target_repo = parse_repo_identity((run_data.get("target") or {}).get("remote"))
+
+    issue_repo_matched = bool(
+        issue_number is not None
+        and issue_repo is not None
+        and target_repo is not None
+        and issue_repo == target_repo
+    )
+    issue_repo_mismatch = bool(
+        issue_number is not None
+        and issue_repo is not None
+        and target_repo is not None
+        and issue_repo != target_repo
+    )
 
     result: dict[str, Any] = decision.to_dict() | {
         "base_branch": base_branch,
@@ -369,6 +406,8 @@ def reflect_run(
         "executed": False,
         "pr_url": None,
         "issue_number": issue_number,
+        "issue_linked": False,
+        "issue_repo_mismatch": issue_repo_mismatch,
         "auto_merge_enabled": False,
     }
     if not execute or decision.allowed_action in ("blocked", "none"):
@@ -376,7 +415,7 @@ def reflect_run(
 
     assert decision.worktree_branch is not None
     assert git_root is not None
-    if issue_number is not None and issue_title:
+    if issue_number is not None and issue_title and issue_repo_matched:
         title = f"[Garden] #{issue_number}: {issue_title}"[:120]
     elif issue_title:
         title = f"[Garden] {issue_title}"[:120]
@@ -388,9 +427,11 @@ def reflect_run(
         if summary_file.is_file()
         else f"Automated Garden run `{decision.run_id}` (`{decision.verdict}`)."
     )
-    if issue_number is not None:
+    if issue_repo_matched and issue_number is not None:
         if not re.search(rf"(?i)\bcloses\s+#{issue_number}\b", base_body):
             base_body = f"Closes #{issue_number}\n\n{base_body}"
+    elif issue_url and issue_url not in base_body:
+        base_body = f"Ref: {issue_url}\n\n{base_body}"
     push_proc = subprocess.run(
         ["git", "push", "-u", "origin", decision.worktree_branch],
         cwd=git_root,
@@ -433,6 +474,7 @@ def reflect_run(
     pr_url = pr_proc.stdout.strip()
     result["executed"] = True
     result["pr_url"] = pr_url
+    result["issue_linked"] = issue_repo_matched
 
     if decision.allowed_action == "auto_merge":
         # Never bypass branch protection (--admin is intentionally never used)

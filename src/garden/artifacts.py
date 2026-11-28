@@ -47,7 +47,12 @@ def render_summary_markdown(
     duration_sec = run_data.get("duration_sec", 0.0)
     retries_used = run_data.get("retries_used", 0)
     usage = run_data.get("usage") or {}
-    cost_usd = float(usage.get("cost_usd") or 0.0)
+    cost_unknown = bool(usage.get("cost_unknown")) or (
+        "cost_usd" in usage and usage.get("cost_usd") is None
+    )
+    cost_display = (
+        "不明" if cost_unknown else f"${float(usage.get('cost_usd') or 0.0):.2f}"
+    )
 
     marker = (
         f"<!-- garden:v1 kind={kind} run_id={run_id} "
@@ -76,7 +81,7 @@ def render_summary_markdown(
         heading,
         "",
         f"- **対象版**: `{commit_short}` / **承認済み仕様**: {spec_desc}",
-        f"- **判定**: `{verdict}`（所要 {duration_sec:.1f}s / 再試行 {retries_used}回 / 費用 ${cost_usd:.2f}）",
+        f"- **判定**: `{verdict}`（所要 {duration_sec:.1f}s / 再試行 {retries_used}回 / 費用 {cost_display}）",
     ]
 
     if target.get("evaluation_criteria_changed"):

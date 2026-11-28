@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,51 @@ from typing import Any
 VALID_OUTCOMES = ("completed", "needs_spec_decision", "blocked", "failed")
 
 
+def parse_nonneg_int_field(
+    raw: Any, field_name: str, *, default: int = 0
+) -> tuple[int | None, str | None]:
+    """Validate an optional non-negative integer usage field.
+
+    Absent (None) returns `(default, None)`. Present-but-malformed values return
+    `(None, error_message)` instead of raising ValueError.
+    """
+    if raw is None:
+        return default, None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None, f"invalid {field_name}: expected non-negative integer, got {raw!r}"
+    if raw < 0:
+        return None, f"invalid {field_name}: expected non-negative integer, got {raw!r}"
+    return raw, None
+
+
+def parse_nonneg_float_field(
+    raw: Any, field_name: str, *, default: float | None = None
+) -> tuple[float | None, str | None]:
+    """Validate an optional non-negative finite float usage field.
+
+    Absent (None) returns `(default, None)`. Present-but-malformed values return
+    `(None, error_message)` instead of raising ValueError.
+    """
+    if raw is None:
+        return default, None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None, f"invalid {field_name}: expected non-negative number, got {raw!r}"
+    val = float(raw)
+    if not math.isfinite(val) or val < 0.0:
+        return None, f"invalid {field_name}: expected non-negative finite number, got {raw!r}"
+    return val, None
+
+
 @dataclass(frozen=True)
 class AgentUsage:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = 0.0
+
+    @property
+    def cost_unknown(self) -> bool:
+        return self.cost_usd is None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -24,6 +64,7 @@ class AgentUsage:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
+            "cost_unknown": self.cost_usd is None,
         }
 
 
@@ -109,12 +150,32 @@ def load_agent_response(path: Path) -> AgentResponse:
                 outcome="failed",
                 summary="needs_spec_decision response missing question.prompt",
             )
-    usage_raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage_val = data.get("usage")
+    if usage_val is not None and not isinstance(usage_val, dict):
+        return AgentResponse(
+            outcome="failed",
+            summary="adapter response usage must be a JSON object",
+        )
+    usage_raw = usage_val if isinstance(usage_val, dict) else {}
+    in_tok, in_err = parse_nonneg_int_field(usage_raw.get("input_tokens"), "usage.input_tokens")
+    if in_err is not None:
+        return AgentResponse(outcome="failed", summary=f"adapter response {in_err}")
+    out_tok, out_err = parse_nonneg_int_field(usage_raw.get("output_tokens"), "usage.output_tokens")
+    if out_err is not None:
+        return AgentResponse(outcome="failed", summary=f"adapter response {out_err}")
+    cost_default = 0.0 if usage_raw.get("cost_unknown") is not True else None
+    cost_usd, cost_err = parse_nonneg_float_field(
+        usage_raw.get("cost_usd"), "usage.cost_usd", default=cost_default
+    )
+    if cost_err is not None:
+        return AgentResponse(outcome="failed", summary=f"adapter response {cost_err}")
+    model_raw = usage_raw.get("model")
+    model = str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
     usage = AgentUsage(
-        model=usage_raw.get("model"),
-        input_tokens=int(usage_raw.get("input_tokens") or 0),
-        output_tokens=int(usage_raw.get("output_tokens") or 0),
-        cost_usd=float(usage_raw.get("cost_usd") or 0.0),
+        model=model,
+        input_tokens=in_tok or 0,
+        output_tokens=out_tok or 0,
+        cost_usd=cost_usd,
     )
     return AgentResponse(
         outcome=outcome,

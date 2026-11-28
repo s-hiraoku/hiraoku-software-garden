@@ -435,13 +435,35 @@ def run_flow(
 
     issue_key: str | None = None
     if resolved_issue is not None:
-        if resolved_issue.get("number") is not None:
-            issue_key = f"issue:{resolved_issue['number']}"
-        elif resolved_issue.get("title"):
-            issue_key = (
-                "issue:"
-                + hashlib.sha256(str(resolved_issue["title"]).encode("utf-8")).hexdigest()[:12]
-            )
+        canonical_issue_input = json.dumps(
+            {
+                "number": resolved_issue.get("number"),
+                "url": resolved_issue.get("url") or "",
+                "repository": resolved_issue.get("repository"),
+                "title": resolved_issue.get("title") or "",
+                "body": resolved_issue.get("body") or "",
+                "labels": list(resolved_issue.get("labels") or []),
+                "comments": [
+                    {
+                        "author": c.get("author") or "",
+                        "author_association": c.get("author_association") or "",
+                        "body": c.get("body") or "",
+                        "created_at": c.get("created_at") or "",
+                    }
+                    for c in (resolved_issue.get("comments") or [])
+                    if isinstance(c, dict)
+                ],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        content_hash = hashlib.sha256(
+            canonical_issue_input.encode("utf-8")
+        ).hexdigest()[:16]
+        num_part = str(issue_or_pr) if issue_or_pr is not None else "unnumbered"
+        issue_key = f"issue:{num_part}:{content_hash}"
+    elif issue_or_pr is not None:
+        issue_key = f"issue:{issue_or_pr}"
 
     idempotency_key = compute_idempotency_key(
         canonical_remote=canonical_remote,
@@ -587,6 +609,7 @@ def run_flow(
                 "number": resolved_issue.get("number"),
                 "title": resolved_issue.get("title"),
                 "url": resolved_issue.get("url") or "",
+                "repository": resolved_issue.get("repository"),
             }
         write_run_artifacts(
             run_dir, run_data, requested_report_kind=requested_report_kind
@@ -603,6 +626,8 @@ def run_flow(
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
+        "cost_known_usd": 0.0,
+        "cost_unknown": False,
     }
 
     # Preflight gate: unapproved spec -> NEEDS_HUMAN
@@ -714,7 +739,9 @@ def run_flow(
         agent_cfg = definition.agents[agent_step.agent]
         sdir, rel_step = _next_step_dir(agent_step.id)
 
-        remaining_budget = max(0.0, eff_delegation.max_cost_usd - usage_totals["cost_usd"])
+        remaining_budget = max(
+            0.0, eff_delegation.max_cost_usd - usage_totals["cost_known_usd"]
+        )
         effective_step_cost_cap = (
             min(agent_cfg.max_cost_usd, remaining_budget)
             if agent_cfg.max_cost_usd is not None
@@ -752,9 +779,15 @@ def run_flow(
 
         usage_totals["input_tokens"] += response.usage.input_tokens
         usage_totals["output_tokens"] += response.usage.output_tokens
-        usage_totals["cost_usd"] = round(
-            usage_totals["cost_usd"] + response.usage.cost_usd, 6
-        )
+        if response.usage.cost_usd is None:
+            usage_totals["cost_unknown"] = True
+            usage_totals["cost_usd"] = None
+        else:
+            usage_totals["cost_known_usd"] = round(
+                usage_totals["cost_known_usd"] + response.usage.cost_usd, 6
+            )
+            if not usage_totals["cost_unknown"]:
+                usage_totals["cost_usd"] = usage_totals["cost_known_usd"]
 
         elapsed = time.monotonic() - started_mono
         guard_res = verify_post_agent_guard(
@@ -763,7 +796,8 @@ def run_flow(
             eff_delegation,
             step_cost_usd=response.usage.cost_usd,
             agent_max_cost_usd=agent_cfg.max_cost_usd,
-            cumulative_cost_usd=usage_totals["cost_usd"],
+            cumulative_cost_usd=usage_totals["cost_known_usd"],
+            allow_unknown_cost=agent_cfg.allow_unknown_cost,
             elapsed_sec=elapsed,
             baseline_untracked=baseline_untracked,
             ignore_prefixes=guard_ignore_prefixes,

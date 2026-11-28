@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 import subprocess
 
-from garden.adapters.base import AgentRequest, AgentResponse, load_agent_response
+from garden.adapters.base import AgentRequest, AgentResponse, AgentUsage, load_agent_response
 from garden.adapters.providers import (
     build_agent_prompt,
+    extract_provider_usage,
+    merge_authoritative_usage,
     parse_provider_stdout,
     prepare_provider_command,
 )
@@ -91,6 +93,26 @@ def run_command_adapter(
 
     if res_path.is_file():
         response = load_agent_response(res_path)
+        if agent.adapter in PROVIDER_ADAPTERS:
+            cli_usage, usage_err = extract_provider_usage(agent.adapter, proc.stdout)
+            if usage_err is not None:
+                response = AgentResponse(
+                    outcome="failed",
+                    summary=f"{agent.adapter} adapter emitted malformed usage statistics: {usage_err}",
+                    usage=AgentUsage(cost_usd=None),
+                )
+            elif cli_usage is not None:
+                response = AgentResponse(
+                    outcome=response.outcome,
+                    summary=response.summary,
+                    changed_files=response.changed_files,
+                    question=response.question,
+                    usage=merge_authoritative_usage(response.usage, cli_usage),
+                )
+                res_path.write_text(
+                    json.dumps(response.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
     elif agent.adapter in PROVIDER_ADAPTERS:
         response = parse_provider_stdout(agent.adapter, proc.stdout, proc.returncode)
         res_path.write_text(

@@ -175,7 +175,13 @@ class ProviderAdapterTests(unittest.TestCase):
                         "body": "Support --greet in CLI.\n```sh\ngarden --greet\n```",
                         "url": "https://github.com/example/repo/issues/42",
                         "labels": ["garden:ready"],
-                        "comments": [{"author": "maintainer", "body": "Keep output UTF-8."}],
+                        "comments": [
+                            {
+                                "author": "maintainer",
+                                "author_association": "OWNER",
+                                "body": "Keep output UTF-8.\n```text\nhello\n```",
+                            }
+                        ],
                     }
                 },
             )
@@ -184,7 +190,7 @@ class ProviderAdapterTests(unittest.TestCase):
                 adapter="gemini",
                 command=(sys.executable, str(stub)),
                 timeout_sec=30,
-                max_cost_usd=1.0,
+                allow_unknown_cost=True,
             )
             step_dir = tmp_path / "step"
             resp, code = run_command_adapter(
@@ -196,5 +202,83 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertEqual(resp.usage.model, "gemini-2.5-pro")
             self.assertEqual(resp.usage.input_tokens, 420)
             self.assertEqual(resp.usage.output_tokens, 85)
+            self.assertIsNone(resp.usage.cost_usd)
+            self.assertTrue(resp.usage.cost_unknown)
             prompt_text = (step_dir / "prompt.md").read_text(encoding="utf-8")
             self.assertIn("````markdown", prompt_text)
+            self.assertIn("### Approved Issue Comments", prompt_text)
+            self.assertIn("#### Comment 1 by `maintainer` (OWNER)", prompt_text)
+
+    def test_gemini_malformed_token_stats_returns_failed_response(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            wt = tmp_path / "wt"
+            wt.mkdir()
+            stub = tmp_path / "bad_gemini.py"
+            stub.write_text(
+                "import json, sys\n"
+                "_ = sys.stdin.read()\n"
+                "print(json.dumps({\n"
+                "  'response': '{\"schema_version\": 1, \"outcome\": \"completed\", \"summary\": \"ok\"}',\n"
+                "  'stats': {'models': {'gemini-2.5-pro': {'tokens': {'prompt': 'unknown', 'candidates': 5}}}},\n"
+                "}))\n",
+                encoding="utf-8",
+            )
+            cfg = AgentConfig(
+                name="gemini_cli",
+                adapter="gemini",
+                command=(sys.executable, str(stub)),
+                timeout_sec=30,
+                allow_unknown_cost=True,
+            )
+            resp, code = run_command_adapter(
+                cfg, self._sample_request(wt), worktree=wt, step_dir=tmp_path / "step"
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(resp.outcome, "failed")
+            self.assertIn("malformed usage statistics", resp.summary)
+
+    def test_cli_measured_usage_overrides_self_reported_in_stdout_and_response_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            wt = tmp_path / "wt"
+            wt.mkdir()
+            # Case 1: response.json written by agent with forged low tokens/cost
+            stub = tmp_path / "file_gemini.py"
+            stub.write_text(
+                "import json, os, pathlib, sys\n"
+                "_ = sys.stdin.read()\n"
+                "pathlib.Path(os.environ['GARDEN_AGENT_RESPONSE']).write_text(json.dumps({\n"
+                "  'schema_version': 1,\n"
+                "  'outcome': 'completed',\n"
+                "  'summary': 'done',\n"
+                "  'changed_files': ['src/a.py'],\n"
+                "  'usage': {'model': 'fake-model', 'input_tokens': 1, 'output_tokens': 1, 'cost_usd': 0.0},\n"
+                "}))\n"
+                "print(json.dumps({\n"
+                "  'response': 'done',\n"
+                "  'stats': {'models': {'gemini-2.5-pro': {'tokens': {'prompt': 900, 'candidates': 250}}}},\n"
+                "}))\n",
+                encoding="utf-8",
+            )
+            cfg = AgentConfig(
+                name="gemini_cli",
+                adapter="gemini",
+                command=(sys.executable, str(stub)),
+                timeout_sec=30,
+                allow_unknown_cost=True,
+            )
+            step_dir = tmp_path / "step"
+            resp, code = run_command_adapter(
+                cfg, self._sample_request(wt), worktree=wt, step_dir=step_dir
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(resp.outcome, "completed")
+            self.assertEqual(resp.usage.model, "gemini-2.5-pro")
+            self.assertEqual(resp.usage.input_tokens, 900)
+            self.assertEqual(resp.usage.output_tokens, 250)
+            self.assertIsNone(resp.usage.cost_usd)
+            saved = json.loads((step_dir / "response.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["usage"]["input_tokens"], 900)
+            self.assertTrue(saved["usage"]["cost_unknown"])
+            self.assertIsNone(saved["usage"]["cost_usd"])
